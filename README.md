@@ -11,15 +11,15 @@ All of my nodes are created with the help of AI, so there may or may not be redu
 <table>
   <tr>
     <td>
-      <p align="center">LTX Sequencer Overview Video</p>
-      <a href="https://www.youtube.com/watch?v=aXDIr8eNovI">
-        <img src="https://img.youtube.com/vi/aXDIr8eNovI/0.jpg" alt="Overview Video" width="400">
+      <p align="center">LTX Director Trailer</p>
+      <a href="https://www.youtube.com/watch?v=fZgtkRcu4_k">
+        <img src="https://img.youtube.com/vi/fZgtkRcu4_k/0.jpg" alt="LTX Director Trailer" width="400">
       </a>
     </td>
     <td>
-      <p align="center">Prompting and Keyframing Guide</p>
-      <a href="https://www.youtube.com/watch?v=ZY4hsvTzbas">
-        <img src="https://img.youtube.com/vi/ZY4hsvTzbas/0.jpg" alt="Prompting and Keyframing Guide" width="400">
+      <p align="center">LTX Director Tutorial</p>
+      <a href="https://www.youtube.com/watch?v=vM60pJJqqEI">
+        <img src="https://img.youtube.com/vi/vM60pJJqqEI/0.jpg" alt="LTX Director Tutorial" width="400">
       </a>
     </td>
   </tr>
