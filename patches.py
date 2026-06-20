@@ -73,13 +73,7 @@ def _make_masked_override(prev_override):
 
 
 def debug_log(msg):
-    try:
-        import os
-        log_path = os.path.join(os.path.dirname(__file__), "debug_prompt_relay.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
+    pass
 
 
 def _make_ltx_mask_wrapper(underlying, mask_fn, attr):

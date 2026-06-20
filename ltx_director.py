@@ -13,7 +13,6 @@ from PIL import Image
 
 import os
 import platform
-import subprocess
 import folder_paths
 import comfy.model_management
 from server import PromptServer
@@ -329,13 +328,11 @@ async def ltx_director_open_folder(request):
     upload_dir = os.path.join(folder_paths.get_input_directory(), "whatdreamscost")
     os.makedirs(upload_dir, exist_ok=True)
     try:
-        current_os = platform.system()
-        if current_os == "Windows":
-            subprocess.Popen(["explorer", os.path.normpath(upload_dir)])
-        elif current_os == "Darwin":
-            subprocess.Popen(["open", upload_dir])
+        if hasattr(os, "startfile"):
+            os.startfile(upload_dir)
         else:
-            subprocess.Popen(["xdg-open", upload_dir])
+            import webbrowser
+            webbrowser.open(os.path.abspath(upload_dir))
         return web.json_response({"success": True})
     except Exception as e:
         print(f"[LTXDirector] Failed to open workspace folder: {e}")

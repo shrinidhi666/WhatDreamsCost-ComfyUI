@@ -43,13 +43,7 @@ def build_temporal_cost_scaled(q_token_idx, Lq, Lk, device, dtype, latent_frames
 
 
 def debug_log(msg):
-    try:
-        import os
-        log_path = os.path.join(os.path.dirname(__file__), "debug_prompt_relay.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
+    pass
 
 
 def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
