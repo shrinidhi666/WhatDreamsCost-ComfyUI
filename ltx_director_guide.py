@@ -293,6 +293,8 @@ class LTXDirectorGuide:
                 "scale_by": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 8.0, "step": 0.01, "tooltip": "Scale the latent by this factor."}),
                 "upscale_method": (["nearest-exact", "bilinear", "area", "bicubic", "bislerp"], {"default": "bicubic", "tooltip": "Method used to upscale/downscale the LATENT (scale_by). lanczos is intentionally excluded — it is only valid on images, not latents."}),
                 "image_resize_method": (["lanczos", "bicubic", "area", "bilinear", "nearest-exact", "bislerp"], {"default": "lanczos", "tooltip": "Resampling filter for resizing guide IMAGES to the latent grid before VAE-encoding (stage-2 resize). lanczos = highest quality."}),
+                "reencode_from_original": ("BOOLEAN", {"default": True, "tooltip": "Re-encode guide images from the ORIGINAL full-res source at THIS stage's resolution (resize + preprocess fresh), instead of reusing the already-scaled+compressed stage-1 copy. Turn ON for the upscale/stage-2 pass so it gains real detail."}),
+                "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1, "tooltip": "CRF preprocess applied to the freshly-resized original (only used when reencode_from_original is ON). 0 = none. Match your normal-workflow per-stage crf."}),
                 "image_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "crop": (["disabled", "center"], {"default": "center"}),
                 "auto_snap_ic_grid": ("BOOLEAN", {"default": True}),
@@ -308,7 +310,7 @@ class LTXDirectorGuide:
     FUNCTION = "execute"
 
     @classmethod
-    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, scale_by=1.0, upscale_method="bicubic", image_resize_method="lanczos", image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
+    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, scale_by=1.0, upscale_method="bicubic", image_resize_method="lanczos", reencode_from_original=True, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
         motion_segments = (motion_guide_data or {}).get("segments", []) if motion_guide_data else []
         image_guides_count = len(guide_data.get("images", [])) if guide_data else 0
         print(f"[LTXDirectorGuide] execute started. motion_segments: {len(motion_segments)}, image_guides: {image_guides_count}, ic_lora_name: {ic_lora_name}, model connected: {model is not None}, retake_mode: {retake_mode}")
@@ -483,19 +485,35 @@ class LTXDirectorGuide:
             print(f"[LTXDirectorGuide] Using Appended Keyframe Guidance. is_lora_active: {is_lora_active}")
 
             # A. Process Image Guides
+            originals = guide_data.get("originals", []) if guide_data else []
             for idx, img_tensor in enumerate(images):
                 f_idx = insert_frames[idx] if idx < len(insert_frames) else 0
                 strength = float(strengths[idx] if idx < len(strengths) else 1.0)
                 if strength <= 0.0:
                     continue
 
-                B_img, H_img, W_img, C_img = img_tensor.shape
+                # Pick the source image. When re-encoding from the clean original is enabled
+                # (and one is available), resize + preprocess the FULL-RES original at THIS
+                # stage's resolution — so an upscale pass gets real detail instead of the
+                # already-scaled+compressed stage-1 copy.
+                use_original = bool(reencode_from_original) and idx < len(originals) and originals[idx] is not None
+                src = originals[idx] if use_original else img_tensor
+
+                B_img, H_img, W_img, C_img = src.shape
                 target_pix_w = int(latent_width * 32)
                 target_pix_h = int(latent_height * 32)
                 if target_pix_w != W_img or target_pix_h != H_img:
-                    img_nchw = img_tensor.permute(0, 3, 1, 2)
-                    img_resized = comfy.utils.common_upscale(img_nchw, target_pix_w, target_pix_h, image_resize_method, "disabled")
-                    img_tensor = img_resized.permute(0, 2, 3, 1)
+                    src_nchw = src.permute(0, 3, 1, 2)
+                    src_resized = comfy.utils.common_upscale(src_nchw, target_pix_w, target_pix_h, image_resize_method, "disabled")
+                    src = src_resized.permute(0, 2, 3, 1)
+
+                # Re-apply the LTXV preprocess (compression) to the freshly-resized original
+                # at this stage's resolution. The reused stage-1 copy is already compressed,
+                # so only (re)compress when working from the clean original.
+                if use_original and img_compression > 0:
+                    src = nodes_lt.LTXVPreprocess().execute(src, img_compression)[0]
+
+                img_tensor = src
 
                 image_pixels, guide_latent = nodes_lt.LTXVAddGuide.encode(vae, latent_width, latent_height, img_tensor, scale_factors)
                 frame_idx, latent_idx = nodes_lt.LTXVAddGuide.get_latent_index(positive, latent_length, len(image_pixels), int(f_idx), scale_factors)

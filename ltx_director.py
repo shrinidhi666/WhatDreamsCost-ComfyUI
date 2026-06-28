@@ -1008,7 +1008,7 @@ class LTXDirector(io.ComfyNode):
         log.info(f"[LTXDirector] execute RECEIVED global_prompt: {repr(global_prompt)}")
 
         # --- Build guide_data from image segments FIRST (to derive output dimensions) ---
-        guide_data = {"images": [], "insert_frames": [], "strengths": [], "frame_rate": frame_rate}
+        guide_data = {"images": [], "originals": [], "insert_frames": [], "strengths": [], "frame_rate": frame_rate}
         derived_w, derived_h = custom_width, custom_height
         try:
             img_segs = [
@@ -1035,6 +1035,11 @@ class LTXDirector(io.ComfyNode):
                     tensor = _load_video_tensor(seg, float(frame_rate))
                 else:
                     tensor = _load_image_tensor(seg)
+
+                # Keep the ORIGINAL (full-res, pre-resize, pre-compress) image so a later
+                # stage (e.g. the upscale pass) can re-resize / re-preprocess from a clean
+                # high-res source instead of the already-degraded stage-1 copy.
+                original_tensor = tensor
 
                 # Apply resize
                 src_h, src_w = tensor.shape[1], tensor.shape[2]
@@ -1075,6 +1080,7 @@ class LTXDirector(io.ComfyNode):
                     insert_frame = max(0, seg_start - start_frame)
                 strength = strengths[idx] if idx < len(strengths) else 1.0
                 guide_data["images"].append(tensor)
+                guide_data["originals"].append(original_tensor)
                 guide_data["insert_frames"].append(insert_frame)
                 guide_data["strengths"].append(float(strength))
             
@@ -1152,6 +1158,7 @@ class LTXDirector(io.ComfyNode):
                     tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by, resize_filter)
                 
                 guide_data["images"].append(tensor)
+                guide_data["originals"].append(tensor)  # dummy (strength 0, skipped downstream)
                 guide_data["insert_frames"].append(0)
                 guide_data["strengths"].append(0.0)
                 
