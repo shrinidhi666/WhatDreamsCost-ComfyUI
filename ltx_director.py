@@ -15,6 +15,7 @@ import os
 import platform
 import folder_paths
 import comfy.model_management
+import comfy.utils
 from server import PromptServer
 from aiohttp import web
 
@@ -465,12 +466,20 @@ def _load_video_tensor(seg: dict, frame_rate: float) -> torch.Tensor:
     frames_np = np.array(frames, dtype=np.float32) / 255.0
     return torch.from_numpy(frames_np)
 
-def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: str, divisible_by: int) -> torch.Tensor:
-    """Resize an [N, H, W, 3] float32 tensor to target dimensions using the given method,
-    then snap the final dimensions to be divisible by `divisible_by`."""
-    
+def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: str, divisible_by: int, resize_filter: str = "lanczos") -> torch.Tensor:
+    """Resize an [N, H, W, 3] float32 tensor to target dimensions using the given method
+    and resampling filter, then snap the final dimensions to be divisible by `divisible_by`.
+
+    `resize_filter` is passed through to comfy.utils.common_upscale, so it supports
+    lanczos / bicubic / area / bilinear / nearest-exact / bislerp. lanczos gives the
+    highest-quality result for both up- and down-scaling of guide images."""
+
     def snap(val, div):
         return max(div, (val // div) * div)
+
+    def scale(t, w, h):
+        # comfy.utils.common_upscale expects [N, C, H, W] and (width, height)
+        return comfy.utils.common_upscale(t, w, h, resize_filter, "disabled")
 
     tw = snap(target_w, divisible_by)
     th = snap(target_h, divisible_by)
@@ -480,25 +489,25 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
         return tensor
 
     t_nchw = tensor.permute(0, 3, 1, 2)
-    
+
     if method == "stretch to fit":
-        resized = F.interpolate(t_nchw, size=(th, tw), mode="nearest-exact")
-        
+        resized = scale(t_nchw, tw, th)
+
     elif method == "maintain aspect ratio":
         ratio = min(tw / W, th / H)
         new_w = snap(int(W * ratio), divisible_by)
         new_h = snap(int(H * ratio), divisible_by)
-        resized = F.interpolate(t_nchw, size=(new_h, new_w), mode="nearest-exact")
-        
+        resized = scale(t_nchw, new_w, new_h)
+
     elif method == "pad" or method == "pad green":
         ratio = min(tw / W, th / H)
         new_w = snap(int(W * ratio), divisible_by)
         new_h = snap(int(H * ratio), divisible_by)
-        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="nearest-exact")
-        
+        inner = scale(t_nchw, new_w, new_h)
+
         pad_l = (tw - new_w) // 2
         pad_t = (th - new_h) // 2
-        
+
         if method == "pad green":
             resized = torch.zeros((N, C, th, tw), dtype=t_nchw.dtype, device=t_nchw.device)
             # #66FF00 is roughly R: 102/255, G: 255/255, B: 0
@@ -508,19 +517,19 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
             resized[:, :, pad_t:pad_t+new_h, pad_l:pad_l+new_w] = inner
         else:
             resized = F.pad(inner, (pad_l, tw - new_w - pad_l, pad_t, th - new_h - pad_t), mode="constant", value=0)
-        
+
     elif method == "crop":
         ratio = max(tw / W, th / H)
         new_w = int(W * ratio)
         new_h = int(H * ratio)
-        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="nearest-exact")
-        
+        inner = scale(t_nchw, new_w, new_h)
+
         left = (new_w - tw) // 2
         top = (new_h - th) // 2
         resized = inner[:, :, top:top+th, left:left+tw]
-        
+
     else:
-        resized = F.interpolate(t_nchw, size=(th, tw), mode="nearest-exact")
+        resized = scale(t_nchw, tw, th)
 
     return resized.permute(0, 2, 3, 1)
 
@@ -938,6 +947,13 @@ class LTXDirector(io.ComfyNode):
                     optional=True,
                     tooltip="How to resize image segments to fit the target dimensions.",
                 ),
+                io.Combo.Input(
+                    "resize_filter",
+                    options=["lanczos", "bicubic", "area", "bilinear", "nearest-exact", "bislerp"],
+                    default="lanczos",
+                    optional=True,
+                    tooltip="Resampling filter for resizing guide images (applied BEFORE compression). lanczos = highest quality for up- and down-scaling.",
+                ),
                 io.Int.Input(
                     "divisible_by", default=32, min=1, max=256, step=1, optional=True,
                     tooltip="Snap the final output image dimensions to be divisible by this number (e.g. 32 for LTX).",
@@ -968,6 +984,7 @@ class LTXDirector(io.ComfyNode):
                 timeline_data, local_prompts, segment_lengths, global_prompt="", guide_strength="", epsilon=1e-3,
                 frame_rate=24, display_mode="seconds",
                 custom_width=768, custom_height=512, resize_method="maintain aspect ratio",
+                resize_filter="lanczos",
                 divisible_by=32, img_compression=0, audio_vae=None, optional_latent=None,
                 use_custom_audio=False, inpaint_audio=True, use_custom_motion=True, override_audio=False) -> io.NodeOutput:
 
@@ -1027,20 +1044,20 @@ class LTXDirector(io.ComfyNode):
 
                 if custom_width > 0 and custom_height > 0:
                     # Both dimensions set — apply selected resize_method (pad, crop, stretch, maintain AR)
-                    tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by)
+                    tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by, resize_filter)
                 elif custom_width > 0:
                     # Width only — scale height from AR, snap both, then resize to exact dimensions
                     tgt_w = snap(custom_width, divisible_by)
                     tgt_h = snap(int(src_h * tgt_w / src_w), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
+                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
                 elif custom_height > 0:
                     # Height only — scale width from AR, snap both, then resize to exact dimensions
                     tgt_h = snap(custom_height, divisible_by)
                     tgt_w = snap(int(src_w * tgt_h / src_h), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
+                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
                 else:
                     # Both zero — keep original dimensions, just snap to divisible_by
-                    tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by)
+                    tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by, resize_filter)
 
 
                 # Apply compression
@@ -1122,17 +1139,17 @@ class LTXDirector(io.ComfyNode):
 
                 # Route the dummy tensor through the exact same resizing pipeline
                 if custom_width > 0 and custom_height > 0:
-                    tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by)
+                    tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by, resize_filter)
                 elif custom_width > 0:
                     tgt_w = snap(custom_width, divisible_by)
                     tgt_h = snap(int(src_h * tgt_w / src_w), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
+                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
                 elif custom_height > 0:
                     tgt_h = snap(custom_height, divisible_by)
                     tgt_w = snap(int(src_w * tgt_h / src_h), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by)
+                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
                 else:
-                    tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by)
+                    tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by, resize_filter)
                 
                 guide_data["images"].append(tensor)
                 guide_data["insert_frames"].append(0)

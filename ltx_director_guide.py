@@ -291,7 +291,8 @@ class LTXDirectorGuide:
                 "ic_lora_name": (["None"] + loras, {"default": "None", "tooltip": "Select the IC-LoRA model to use for motion guidance."}),
                 "ic_lora_strength": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
                 "scale_by": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 8.0, "step": 0.01, "tooltip": "Scale the latent by this factor."}),
-                "upscale_method": (["nearest-exact", "bilinear", "area", "bicubic", "bislerp"], {"default": "bicubic", "tooltip": "Method used to upscale/downscale the latent."}),
+                "upscale_method": (["nearest-exact", "bilinear", "area", "bicubic", "bislerp"], {"default": "bicubic", "tooltip": "Method used to upscale/downscale the LATENT (scale_by). lanczos is intentionally excluded — it is only valid on images, not latents."}),
+                "image_resize_method": (["lanczos", "bicubic", "area", "bilinear", "nearest-exact", "bislerp"], {"default": "lanczos", "tooltip": "Resampling filter for resizing guide IMAGES to the latent grid before VAE-encoding (stage-2 resize). lanczos = highest quality."}),
                 "image_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "crop": (["disabled", "center"], {"default": "center"}),
                 "auto_snap_ic_grid": ("BOOLEAN", {"default": True}),
@@ -307,7 +308,7 @@ class LTXDirectorGuide:
     FUNCTION = "execute"
 
     @classmethod
-    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, scale_by=1.0, upscale_method="bicubic", image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
+    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, scale_by=1.0, upscale_method="bicubic", image_resize_method="lanczos", image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
         motion_segments = (motion_guide_data or {}).get("segments", []) if motion_guide_data else []
         image_guides_count = len(guide_data.get("images", [])) if guide_data else 0
         print(f"[LTXDirectorGuide] execute started. motion_segments: {len(motion_segments)}, image_guides: {image_guides_count}, ic_lora_name: {ic_lora_name}, model connected: {model is not None}, retake_mode: {retake_mode}")
@@ -493,7 +494,7 @@ class LTXDirectorGuide:
                 target_pix_h = int(latent_height * 32)
                 if target_pix_w != W_img or target_pix_h != H_img:
                     img_nchw = img_tensor.permute(0, 3, 1, 2)
-                    img_resized = comfy.utils.common_upscale(img_nchw, target_pix_w, target_pix_h, upscale_method, "disabled")
+                    img_resized = comfy.utils.common_upscale(img_nchw, target_pix_w, target_pix_h, image_resize_method, "disabled")
                     img_tensor = img_resized.permute(0, 2, 3, 1)
 
                 image_pixels, guide_latent = nodes_lt.LTXVAddGuide.encode(vae, latent_width, latent_height, img_tensor, scale_factors)
