@@ -290,7 +290,9 @@ class LTXDirectorGuide:
                 "model": ("MODEL", {"tooltip": "Connect model if using IC-LoRA for motion guidance."}),
                 "ic_lora_name": (["None"] + loras, {"default": "None", "tooltip": "Select the IC-LoRA model to use for motion guidance."}),
                 "ic_lora_strength": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
-                "scale_by": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 8.0, "step": 0.01, "tooltip": "Scale the latent by this factor."}),
+                "scale_by": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 8.0, "step": 0.01, "tooltip": "Scale the latent by this factor. Ignored when target_width AND target_height are both > 0."}),
+                "target_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Absolute target WIDTH in pixels for this stage's latent (snapped to /32). 0 = use scale_by. Set with target_height to pin an exact resolution."}),
+                "target_height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Absolute target HEIGHT in pixels for this stage's latent (snapped to /32). 0 = use scale_by. Set with target_width to pin an exact resolution."}),
                 "upscale_method": (["nearest-exact", "bilinear", "area", "bicubic", "bislerp"], {"default": "bicubic", "tooltip": "Method used to upscale/downscale the LATENT (scale_by). lanczos is intentionally excluded — it is only valid on images, not latents."}),
                 "image_resize_method": (["lanczos", "bicubic", "area", "bilinear", "nearest-exact", "bislerp"], {"default": "lanczos", "tooltip": "Resampling filter for resizing guide IMAGES to the latent grid before VAE-encoding (stage-2 resize). lanczos = highest quality."}),
                 "reencode_from_original": ("BOOLEAN", {"default": True, "tooltip": "Re-encode guide images from the ORIGINAL full-res source at THIS stage's resolution (resize + preprocess fresh), instead of reusing the already-scaled+compressed stage-1 copy. Turn ON for the upscale/stage-2 pass so it gains real detail."}),
@@ -310,7 +312,7 @@ class LTXDirectorGuide:
     FUNCTION = "execute"
 
     @classmethod
-    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, scale_by=1.0, upscale_method="bicubic", image_resize_method="lanczos", reencode_from_original=True, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
+    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, scale_by=1.0, target_width=0, target_height=0, upscale_method="bicubic", image_resize_method="lanczos", reencode_from_original=True, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
         motion_segments = (motion_guide_data or {}).get("segments", []) if motion_guide_data else []
         image_guides_count = len(guide_data.get("images", [])) if guide_data else 0
         print(f"[LTXDirectorGuide] execute started. motion_segments: {len(motion_segments)}, image_guides: {image_guides_count}, ic_lora_name: {ic_lora_name}, model connected: {model is not None}, retake_mode: {retake_mode}")
@@ -329,7 +331,13 @@ class LTXDirectorGuide:
         latent_image = latent["samples"].clone()
         noise_mask = _clone_noise_mask(latent, latent_image)
 
-        if scale_by != 1.0:
+        # Resize the latent: explicit target_width/target_height (pixels) takes priority,
+        # otherwise fall back to the scale_by multiplier.
+        if target_width > 0 and target_height > 0:
+            target_w = max(1, int(target_width) // 32)
+            target_h = max(1, int(target_height) // 32)
+            latent_image, noise_mask = _resize_latent_spatial(latent_image, noise_mask, target_w, target_h, upscale_method)
+        elif scale_by != 1.0:
             _, _, _, h, w = latent_image.shape
             target_w = max(1, round(w * scale_by))
             target_h = max(1, round(h * scale_by))
