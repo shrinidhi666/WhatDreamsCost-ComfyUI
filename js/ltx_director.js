@@ -9955,10 +9955,9 @@ class TimelineEditor {
   }
 
   // --- Settings Menu ---
-  // Widgets that are managed by the settings menu (hidden from node by default).
-  // NOTE: divisible_by and img_compression intentionally removed from this list
-  // so they render directly on the node face (alongside custom_width/height/resize_method)
-  // instead of being buried in the gear/settings popup. display_mode + epsilon stay in the menu.
+  // Widgets managed by the settings (gear) menu, hidden from the node face by default.
+  // The Director only sizes the base latent now (custom_width/height/divisible_by render on the
+  // face); image resize/compression moved entirely to LTXDirectorGuide.
   get _settingsWidgetNames() {
     return ["display_mode", "epsilon"];
   }
@@ -10021,9 +10020,7 @@ class TimelineEditor {
       if (isLiteGraph && w.type === "converted-widget" && this.node.inputs) {
         if (!this.node.inputs.find(i => i.name === name)) {
           let type = "FLOAT";
-          if (name === "divisible_by" || name === "img_compression") {
-            type = "INT";
-          } else if (name === "display_mode") {
+          if (name === "display_mode") {
             type = "COMBO";
           }
           const slot = this.node.addInput(name, type);
@@ -11168,10 +11165,7 @@ app.registerExtension({
           display_mode: "seconds",
           custom_width: 0,
           custom_height: 0,
-          resize_method: "maintain aspect ratio",
-          resize_filter: "lanczos",
           divisible_by: 32,
-          img_compression: 18,
           guide_strength: "",
           local_prompts: "",
           segment_lengths: "",
@@ -11210,12 +11204,6 @@ app.registerExtension({
 
         // Set default width to be wider on creation (approx 2.5x default ~220px)
         this.size[0] = 1375;
-
-        // Force default for img_compression if not set (ComfyUI sometimes skips optional defaults)
-        const compWidget = this.widgets?.find(w => w.name === "img_compression");
-        if (compWidget && (compWidget.value === undefined || compWidget.value === null || compWidget.value === 0)) {
-          compWidget.value = 18;
-        }
 
         const self = this;
         this._syncGlobalPromptFromLink = function () {
@@ -11413,10 +11401,7 @@ app.registerExtension({
             display_mode: "seconds",
             custom_width: 0,
             custom_height: 0,
-            resize_method: "maintain aspect ratio",
-            resize_filter: "lanczos",
             divisible_by: 32,
-            img_compression: 18,
             guide_strength: "",
             local_prompts: "",
             segment_lengths: "",

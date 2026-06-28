@@ -466,6 +466,30 @@ def _load_video_tensor(seg: dict, frame_rate: float) -> torch.Tensor:
     frames_np = np.array(frames, dtype=np.float32) / 255.0
     return torch.from_numpy(frames_np)
 
+def _target_dims(src_w: int, src_h: int, custom_w: int, custom_h: int, divisible_by: int):
+    """Compute the target (width, height) for a guide image WITHOUT resampling it.
+
+    Mirrors the fit logic of _resize_image's target sizing so the Director can size the base
+    latent while passing the raw image through untouched:
+      - both custom dims set  -> exactly those (snapped)
+      - one custom dim set    -> that dim, other derived from source aspect ratio
+      - neither set           -> source dims (snapped, aspect preserved)
+    All results snapped down to a multiple of `divisible_by`.
+    """
+    def snap(v):
+        return max(divisible_by, (int(v) // divisible_by) * divisible_by)
+
+    if custom_w > 0 and custom_h > 0:
+        return snap(custom_w), snap(custom_h)
+    if custom_w > 0:
+        w = snap(custom_w)
+        return w, snap(int(src_h * w / src_w))
+    if custom_h > 0:
+        h = snap(custom_h)
+        return snap(int(src_w * h / src_h)), h
+    return snap(src_w), snap(src_h)
+
+
 def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: str, divisible_by: int, resize_filter: str = "lanczos") -> torch.Tensor:
     """Resize an [N, H, W, 3] float32 tensor to target dimensions using the given method
     and resampling filter, then snap the final dimensions to be divisible by `divisible_by`.
@@ -532,62 +556,6 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
         resized = scale(t_nchw, tw, th)
 
     return resized.permute(0, 2, 3, 1)
-
-
-def _compress_image(tensor: torch.Tensor, crf: int) -> torch.Tensor:
-    """Apply H.264 compression artefacts to an [N, H, W, 3] float32 tensor (ComfyUI image format).
-    crf=0 means no compression. Uses PyAV to encode/decode frames in-memory."""
-    if crf == 0:
-        return tensor
-        
-    N, H, W, C = tensor.shape
-    
-    # Dimensions must be even for H.264
-    h = (H // 2) * 2
-    w = (W // 2) * 2
-    
-    # uint8 [N, H, W, 3]
-    tensor_bytes = (tensor[:, :h, :w, :] * 255.0).byte().cpu().numpy()
-    
-    try:
-        buf = _io.BytesIO()
-        container = av.open(buf, mode="w", format="mp4")
-        stream = container.add_stream("libx264", rate=24)
-        stream.width = w
-        stream.height = h
-        stream.pix_fmt = "yuv420p"
-        stream.options = {"crf": str(crf), "preset": "ultrafast"}
-        
-        for i in range(N):
-            frame = av.VideoFrame.from_ndarray(tensor_bytes[i], format="rgb24")
-            for pkt in stream.encode(frame):
-                container.mux(pkt)
-                
-        for pkt in stream.encode(None):
-            container.mux(pkt)
-            
-        container.close()
-        
-        buf.seek(0)
-        container_r = av.open(buf, mode="r")
-        decoded = [frame_r.to_ndarray(format="rgb24") for frame_r in container_r.decode(video=0)]
-        container_r.close()
-        
-        if not decoded:
-            return tensor
-            
-        decoded_np = np.stack(decoded).astype(np.float32) / 255.0
-        
-        # Re-embed into original tensor shape (may have been cropped by even-rounding)
-        out = tensor.clone()
-        dec_N = min(N, len(decoded))
-        out[:dec_N, :h, :w] = torch.from_numpy(decoded_np[:dec_N]).to(tensor.device, tensor.dtype)
-        
-        return out
-        
-    except Exception as e:
-        log.warning("[PromptRelay] img_compression encode/decode failed: %s", e)
-        return tensor
 
 
 def _build_combined_audio(timeline_data_str: str, start_frame: int, duration_frames: int, frame_rate: float, override_audio: bool = False) -> dict:
@@ -940,27 +908,9 @@ class LTXDirector(io.ComfyNode):
                     "custom_height", default=0, min=0, max=8192, step=1, optional=True,
                     tooltip="Target output height for all image segments. Set to 0 to use the original image height.",
                 ),
-                io.Combo.Input(
-                    "resize_method",
-                    options=["maintain aspect ratio", "stretch to fit", "pad", "pad green", "crop"],
-                    default="maintain aspect ratio",
-                    optional=True,
-                    tooltip="How to resize image segments to fit the target dimensions.",
-                ),
-                io.Combo.Input(
-                    "resize_filter",
-                    options=["lanczos", "bicubic", "area", "bilinear", "nearest-exact", "bislerp"],
-                    default="lanczos",
-                    optional=True,
-                    tooltip="Resampling filter for resizing guide images (applied BEFORE compression). lanczos = highest quality for up- and down-scaling.",
-                ),
                 io.Int.Input(
                     "divisible_by", default=32, min=1, max=256, step=1, optional=True,
-                    tooltip="Snap the final output image dimensions to be divisible by this number (e.g. 32 for LTX).",
-                ),
-                io.Int.Input(
-                    "img_compression", default=18, min=0, max=100, step=1, optional=True,
-                    tooltip="H.264 CRF compression to apply to each guide image. 0 = no compression, higher = more artefacts.",
+                    tooltip="Snap the base latent dimensions to be divisible by this number (e.g. 32 for LTX). The Director only SIZES the latent — raw guide images are passed to LTXDirectorGuide, which resizes + compresses them per stage.",
                 ),
                 io.Boolean.Input(
                     "override_audio", default=False, optional=True,
@@ -983,9 +933,8 @@ class LTXDirector(io.ComfyNode):
     def execute(cls, model, clip, start_second, end_second, duration_seconds, start_frame, end_frame, duration_frames,
                 timeline_data, local_prompts, segment_lengths, global_prompt="", guide_strength="", epsilon=1e-3,
                 frame_rate=24, display_mode="seconds",
-                custom_width=768, custom_height=512, resize_method="maintain aspect ratio",
-                resize_filter="lanczos",
-                divisible_by=32, img_compression=0, audio_vae=None, optional_latent=None,
+                custom_width=768, custom_height=512,
+                divisible_by=32, audio_vae=None, optional_latent=None,
                 use_custom_audio=False, inpaint_audio=True, use_custom_motion=True, override_audio=False) -> io.NodeOutput:
 
         # Parse timeline data
@@ -1008,7 +957,7 @@ class LTXDirector(io.ComfyNode):
         log.info(f"[LTXDirector] execute RECEIVED global_prompt: {repr(global_prompt)}")
 
         # --- Build guide_data from image segments FIRST (to derive output dimensions) ---
-        guide_data = {"images": [], "originals": [], "insert_frames": [], "strengths": [], "frame_rate": frame_rate}
+        guide_data = {"images": [], "insert_frames": [], "strengths": [], "frame_rate": frame_rate}
         derived_w, derived_h = custom_width, custom_height
         try:
             img_segs = [
@@ -1036,51 +985,20 @@ class LTXDirector(io.ComfyNode):
                 else:
                     tensor = _load_image_tensor(seg)
 
-                # Keep the ORIGINAL (full-res, pre-resize, pre-compress) image so a later
-                # stage (e.g. the upscale pass) can re-resize / re-preprocess from a clean
-                # high-res source instead of the already-degraded stage-1 copy.
-                original_tensor = tensor
-
-                # Apply resize
+                # The Director passes the RAW image through untouched — it NEVER resizes or
+                # compresses guide-image pixels. LTXDirectorGuide resizes + preprocesses them
+                # per stage. For its OWN work (sizing the base latent) the Director only needs
+                # the target dimensions, computed arithmetically here (no resampling).
                 src_h, src_w = tensor.shape[1], tensor.shape[2]
-
-                def snap(val, div):
-                    return max(div, (val // div) * div)
-
-                if custom_width > 0 and custom_height > 0:
-                    # Both dimensions set — apply selected resize_method (pad, crop, stretch, maintain AR)
-                    tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by, resize_filter)
-                elif custom_width > 0:
-                    # Width only — scale height from AR, snap both, then resize to exact dimensions
-                    tgt_w = snap(custom_width, divisible_by)
-                    tgt_h = snap(int(src_h * tgt_w / src_w), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
-                elif custom_height > 0:
-                    # Height only — scale width from AR, snap both, then resize to exact dimensions
-                    tgt_h = snap(custom_height, divisible_by)
-                    tgt_w = snap(int(src_w * tgt_h / src_h), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
-                else:
-                    # Both zero — keep original dimensions, just snap to divisible_by
-                    tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by, resize_filter)
-
-
-                # Apply compression
-                if img_compression > 0:
-                    tensor = _compress_image(tensor, img_compression)
-
-                # Record dimensions of the first processed image for latent generation
                 if idx == 0:
-                    derived_h = tensor.shape[1]
-                    derived_w = tensor.shape[2]
+                    derived_w, derived_h = _target_dims(src_w, src_h, custom_width, custom_height, divisible_by)
 
                 if seg.get("isEndFrame"):
                     insert_frame = max(0, seg_start + int(seg.get("length", 1)) - 1 - start_frame)
                 else:
                     insert_frame = max(0, seg_start - start_frame)
                 strength = strengths[idx] if idx < len(strengths) else 1.0
-                guide_data["images"].append(tensor)
-                guide_data["originals"].append(original_tensor)
+                guide_data["images"].append(tensor)  # RAW image — Guide resizes/compresses per stage
                 guide_data["insert_frames"].append(insert_frame)
                 guide_data["strengths"].append(float(strength))
             
@@ -1137,33 +1055,15 @@ class LTXDirector(io.ComfyNode):
                                 except:
                                     pass
 
-                # Create a dummy tensor of the exact source dimensions
+                # Create a dummy tensor at the source dimensions (strength 0 — skipped by the
+                # Guide; only present so the base latent can be sized from these dims).
                 tensor = torch.zeros((1, src_h, src_w, 3), dtype=torch.float32)
 
-                def snap(val, div):
-                    return max(div, (val // div) * div)
+                derived_w, derived_h = _target_dims(src_w, src_h, custom_width, custom_height, divisible_by)
 
-                # Route the dummy tensor through the exact same resizing pipeline
-                if custom_width > 0 and custom_height > 0:
-                    tensor = _resize_image(tensor, custom_width, custom_height, resize_method, divisible_by, resize_filter)
-                elif custom_width > 0:
-                    tgt_w = snap(custom_width, divisible_by)
-                    tgt_h = snap(int(src_h * tgt_w / src_w), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
-                elif custom_height > 0:
-                    tgt_h = snap(custom_height, divisible_by)
-                    tgt_w = snap(int(src_w * tgt_h / src_h), divisible_by)
-                    tensor = _resize_image(tensor, tgt_w, tgt_h, "stretch to fit", divisible_by, resize_filter)
-                else:
-                    tensor = _resize_image(tensor, src_w, src_h, "maintain aspect ratio", divisible_by, resize_filter)
-                
-                guide_data["images"].append(tensor)
-                guide_data["originals"].append(tensor)  # dummy (strength 0, skipped downstream)
+                guide_data["images"].append(tensor)  # RAW dummy (strength 0)
                 guide_data["insert_frames"].append(0)
                 guide_data["strengths"].append(0.0)
-                
-                derived_w = tensor.shape[2]
-                derived_h = tensor.shape[1]
 
         except Exception as e:
             log.warning("[PromptRelay] Could not build guide_data: %s", e)
@@ -1325,7 +1225,7 @@ class LTXDirector(io.ComfyNode):
                     raise e
 
         # --- Motion guide output from timeline video segments ---
-        motion_guide_data = {"segments": [], "frame_rate": float(frame_rate), "duration_frames": int(duration_frames), "resize_method": resize_method}
+        motion_guide_data = {"segments": [], "frame_rate": float(frame_rate), "duration_frames": int(duration_frames)}
         try:
             tdata = json.loads(timeline_data) if timeline_data else {}
             if use_custom_motion:
@@ -1360,7 +1260,6 @@ class LTXDirector(io.ComfyNode):
         guide_data["timeline_data"] = timeline_data
         guide_data["start_frame"] = start_frame
         guide_data["duration_frames"] = duration_frames
-        guide_data["resize_method"] = resize_method
 
         return io.NodeOutput(patched, conditioning, latent, audio_latent, guide_data, motion_guide_data, float(frame_rate), audio_out)
 
