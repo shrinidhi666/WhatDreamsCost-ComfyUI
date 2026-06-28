@@ -292,9 +292,8 @@ class LTXDirectorGuide:
                 "ic_lora_strength": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
                 "image_resize_method": (["lanczos", "bicubic", "area", "bilinear", "nearest-exact", "bislerp"], {"default": "lanczos", "tooltip": "Resampling filter used to resize the RAW guide images to this stage's resolution. lanczos = highest quality for up- and down-scaling."}),
                 "resize_method": (["maintain aspect ratio", "stretch to fit", "pad", "pad green", "crop"], {"default": "maintain aspect ratio", "tooltip": "How the raw guide images are fitted to the target resolution. Also used as the motion / IC-LoRA fit method."}),
-                "resize_raw_images": ("BOOLEAN", {"default": True, "tooltip": "Resize the RAW guide images to this stage's resolution before encoding. Off = feed them at native size."}),
-                "image_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Exact WIDTH the guide image is resized to BEFORE LTXVPreprocess (like ImageResizeKJv2). 0 = use the latent size. Set with image_height to control the resolution that LTXVPreprocess sees."}),
-                "image_height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Exact HEIGHT the guide image is resized to BEFORE LTXVPreprocess (like ImageResizeKJv2). 0 = use the latent size. Set with image_width to control the resolution that LTXVPreprocess sees."}),
+                "image_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Resolution (WIDTH) the guide image is fed into LTXVPreprocess at. 0 = native full-res (highest quality). Set BOTH image_width and image_height for an exact resolution (like ImageResizeKJv2). The image is resized to the latent grid afterward for encoding."}),
+                "image_height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Resolution (HEIGHT) the guide image is fed into LTXVPreprocess at. 0 = native full-res (highest quality). Set BOTH image_width and image_height for an exact resolution (like ImageResizeKJv2). The image is resized to the latent grid afterward for encoding."}),
                 "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1, "tooltip": "CRF preprocess (LTXVPreprocess) applied to the guide image at THIS stage. 0 = none. This is the only place compression happens — set per stage (e.g. 22 for the prepass, 18 for the upscale)."}),
                 "image_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "crop": (["disabled", "center"], {"default": "center"}),
@@ -311,7 +310,7 @@ class LTXDirectorGuide:
     FUNCTION = "execute"
 
     @classmethod
-    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", resize_raw_images=True, image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
+    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
         motion_segments = (motion_guide_data or {}).get("segments", []) if motion_guide_data else []
         image_guides_count = len(guide_data.get("images", [])) if guide_data else 0
         print(f"[LTXDirectorGuide] execute started. motion_segments: {len(motion_segments)}, image_guides: {image_guides_count}, ic_lora_name: {ic_lora_name}, model connected: {model is not None}, retake_mode: {retake_mode}")
@@ -495,13 +494,10 @@ class LTXDirectorGuide:
 
                 src = img_tensor  # RAW image from the Director (full-res, un-compressed)
 
-                # 1. Resize to the resolution LTXVPreprocess will see. image_width/image_height
-                #    give exact control (like ImageResizeKJv2); 0 = use the latent size.
-                #    fit (active_resize_method) + filter (image_resize_method) + /32 snap.
-                if resize_raw_images:
-                    pre_w = image_width if image_width > 0 else target_pix_w
-                    pre_h = image_height if image_height > 0 else target_pix_h
-                    src = _resize_image(src, pre_w, pre_h, active_resize_method, 32, image_resize_method)
+                # 1. Resolution fed into LTXVPreprocess. image_width/image_height both > 0 =
+                #    exact resolution (like ImageResizeKJv2); 0 = native full-res (no pre-resize).
+                if image_width > 0 and image_height > 0:
+                    src = _resize_image(src, image_width, image_height, active_resize_method, 32, image_resize_method)
 
                 # 2. LTXV preprocess (compression) runs at THAT resolution — the only place
                 #    compression happens, per stage.
