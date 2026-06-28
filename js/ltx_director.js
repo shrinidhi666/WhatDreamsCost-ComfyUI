@@ -9956,8 +9956,11 @@ class TimelineEditor {
 
   // --- Settings Menu ---
   // Widgets that are managed by the settings menu (hidden from node by default).
+  // NOTE: divisible_by and img_compression intentionally removed from this list
+  // so they render directly on the node face (alongside custom_width/height/resize_method)
+  // instead of being buried in the gear/settings popup. display_mode + epsilon stay in the menu.
   get _settingsWidgetNames() {
-    return ["display_mode", "epsilon", "divisible_by", "img_compression"];
+    return ["display_mode", "epsilon"];
   }
 
   // Hide all settings widgets on the node (called on init).
@@ -10601,17 +10604,8 @@ class TimelineEditor {
       menu.appendChild(this._makeSettingRow("Epsilon", createScrubbableNumberControl(epsWidget, 0.0001, 0.0001, 0.99, true)));
     }
 
-    // --- Divisible By ---
-    const divByWidget = this.node.widgets?.find(w => w.name === "divisible_by");
-    if (divByWidget) {
-      menu.appendChild(this._makeSettingRow("Divisible By", createScrubbableNumberControl(divByWidget, 1, 1, 256, false)));
-    }
-
-    // --- Img Compression ---
-    const compWidget = this.node.widgets?.find(w => w.name === "img_compression");
-    if (compWidget) {
-      menu.appendChild(this._makeSettingRow("Img Compression", createScrubbableNumberControl(compWidget, 1, 0, 100, false)));
-    }
+    // NOTE: "Divisible By" and "Img Compression" rows removed from this menu —
+    // they are now exposed directly on the node face (see _settingsWidgetNames).
 
     // --- Divider ---
     const folderDivider = document.createElement("div");

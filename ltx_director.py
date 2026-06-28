@@ -482,19 +482,19 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
     t_nchw = tensor.permute(0, 3, 1, 2)
     
     if method == "stretch to fit":
-        resized = F.interpolate(t_nchw, size=(th, tw), mode="bilinear", align_corners=False)
+        resized = F.interpolate(t_nchw, size=(th, tw), mode="nearest-exact")
         
     elif method == "maintain aspect ratio":
         ratio = min(tw / W, th / H)
         new_w = snap(int(W * ratio), divisible_by)
         new_h = snap(int(H * ratio), divisible_by)
-        resized = F.interpolate(t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False)
+        resized = F.interpolate(t_nchw, size=(new_h, new_w), mode="nearest-exact")
         
     elif method == "pad" or method == "pad green":
         ratio = min(tw / W, th / H)
         new_w = snap(int(W * ratio), divisible_by)
         new_h = snap(int(H * ratio), divisible_by)
-        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False)
+        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="nearest-exact")
         
         pad_l = (tw - new_w) // 2
         pad_t = (th - new_h) // 2
@@ -513,14 +513,14 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
         ratio = max(tw / W, th / H)
         new_w = int(W * ratio)
         new_h = int(H * ratio)
-        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="bilinear", align_corners=False)
+        inner = F.interpolate(t_nchw, size=(new_h, new_w), mode="nearest-exact")
         
         left = (new_w - tw) // 2
         top = (new_h - th) // 2
         resized = inner[:, :, top:top+th, left:left+tw]
         
     else:
-        resized = F.interpolate(t_nchw, size=(th, tw), mode="bilinear", align_corners=False)
+        resized = F.interpolate(t_nchw, size=(th, tw), mode="nearest-exact")
 
     return resized.permute(0, 2, 3, 1)
 
