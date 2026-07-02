@@ -3826,6 +3826,14 @@ class TimelineEditor {
         this.updateOverrideAudioToggleStyle(overrideWidget.value);
       }
     }
+
+    // 5. Sync the MSR panel (thumbnails + frame count + visibility) with this.timeline.msr —
+    // covers project-file loads and any other path that re-parses the timeline.
+    if (this.msrPanel) {
+      if (this._msrHasContent()) this.msrPanelVisible = true;
+      this._refreshMsrPanel();
+      this._updateMsrPanelVisibility();
+    }
   }
 
   checkResize() {

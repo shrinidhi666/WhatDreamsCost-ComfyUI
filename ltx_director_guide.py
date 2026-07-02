@@ -413,6 +413,8 @@ class LTXDirectorGuide:
         msr_subjects = [s for s in (msr_subject_1, msr_subject_2, msr_subject_3, msr_subject_4) if s is not None]
         if msr_subjects and msr_background is None:
             raise ValueError("[LTXDirectorGuide] MSR: msr_background is required when any msr_subject is connected.")
+        if msr_background is not None and not msr_subjects:
+            raise ValueError("[LTXDirectorGuide] MSR: at least one msr_subject is required when msr_background is connected.")
         if not msr_subjects and msr_background is None:
             msr_subjects, msr_background, msr_frame_count = _load_msr_panel(tdata, msr_frame_count)
         msr_active = msr_background is not None and len(msr_subjects) > 0
