@@ -168,6 +168,33 @@ def _dilate_latent(latent: dict, horizontal_scale: int, vertical_scale: int) -> 
     
     return {"samples": dilated_samples, "noise_mask": dilated_mask}
 
+# --- MSR (Multi-Subject Reference) compositor ---
+# Ported from ComfyUI-Licon-MSR (LiconMSR.create_video) so the Director has no hard dependency
+# on that pack. Reference behavior preserved: each still is stretch-fitted to the target size
+# (LiconMSR uses cv2 LANCZOS4; _resize_image's lanczos matches) and the frame budget is split
+# evenly across subjects + background, remainder distributed from the front.
+
+def _expand_msr_frames(images, frame_count):
+    base_count = frame_count // len(images)
+    remainder = frame_count % len(images)
+    frames = []
+    for index, image in enumerate(images):
+        repeats = base_count + (1 if index < remainder else 0)
+        frames.extend([image] * repeats)
+    return frames
+
+def _build_msr_guide(subjects, background, width, height, frame_count):
+    """Compose the MSR reference clip: 1-4 subject stills + a background still, each resized to
+    width x height, expanded to frame_count frames. Returns [frame_count, H, W, 3] float32."""
+    prepared = []
+    for img in [*subjects, background]:
+        t = img[:1] if img.ndim == 4 else img.unsqueeze(0)
+        t = t[..., :3].float()
+        t = _resize_image(t, width, height, "stretch to fit", 1, "lanczos")
+        prepared.append(t[0])
+    frames = _expand_msr_frames(prepared, int(frame_count))
+    return torch.stack(frames, dim=0)
+
 def _resolve_input_video_path(video_file):
     if os.path.isabs(str(video_file)) and os.path.exists(str(video_file)):
         return str(video_file)
@@ -302,6 +329,15 @@ class LTXDirectorGuide:
                 "tile_size": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
                 "tile_overlap": ("INT", {"default": 64, "min": 16, "max": 256, "step": 16}),
                 "retake_mode": ("BOOLEAN", {"default": False, "tooltip": "Force Retake Mode. If false, it will still auto-detect Retake Mode from the timeline data."}),
+                "msr_lora_name": (["None"] + loras, {"default": "None", "tooltip": "Licon-MSR (multi-subject reference) IC-LoRA. Chained on top of ic_lora_name and applied ONLY when MSR images are connected."}),
+                "msr_lora_strength": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+                "msr_subject_1": ("IMAGE", {"tooltip": "MSR subject reference 1 (identity lock)."}),
+                "msr_subject_2": ("IMAGE", {"tooltip": "MSR subject reference 2."}),
+                "msr_subject_3": ("IMAGE", {"tooltip": "MSR subject reference 3."}),
+                "msr_subject_4": ("IMAGE", {"tooltip": "MSR subject reference 4."}),
+                "msr_background": ("IMAGE", {"tooltip": "MSR background / scene reference. REQUIRED when any msr_subject is connected."}),
+                "msr_frame_count": ([17, 25, 33, 41], {"default": 17, "tooltip": "Frames in the composed MSR reference clip (split across subjects + background)."}),
+                "msr_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Guide-attention strength for the MSR reference tokens."}),
             }
         }
 
@@ -310,7 +346,7 @@ class LTXDirectorGuide:
     FUNCTION = "execute"
 
     @classmethod
-    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False):
+    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False, msr_lora_name="None", msr_lora_strength=1.0, msr_subject_1=None, msr_subject_2=None, msr_subject_3=None, msr_subject_4=None, msr_background=None, msr_frame_count=17, msr_attention_strength=1.0):
         motion_segments = (motion_guide_data or {}).get("segments", []) if motion_guide_data else []
         image_guides_count = len(guide_data.get("images", [])) if guide_data else 0
         print(f"[LTXDirectorGuide] execute started. motion_segments: {len(motion_segments)}, image_guides: {image_guides_count}, ic_lora_name: {ic_lora_name}, model connected: {model is not None}, retake_mode: {retake_mode}")
@@ -319,9 +355,54 @@ class LTXDirectorGuide:
         # node's own resize_method widget (the Director no longer dictates it).
         active_resize_method = resize_method
 
+        # Parse timeline JSON early: retake detection and track contents decide which LoRAs load.
+        import json
+        timeline_data_str = guide_data.get("timeline_data", "{}") if guide_data else "{}"
+        try:
+            tdata = json.loads(timeline_data_str)
+        except Exception:
+            tdata = {}
+        is_retake_active = bool(retake_mode) or tdata.get("retakeMode", False)
+
+        # Director image guides and motion video segments
+        images = guide_data.get("images", []) if guide_data else []
+        insert_frames = guide_data.get("insert_frames", []) if guide_data else []
+        strengths = guide_data.get("strengths", []) if guide_data else []
+        segments = (motion_guide_data or {}).get("segments", [])
+
+        # MSR track: active only when a background AND at least one subject are connected.
+        msr_subjects = [s for s in (msr_subject_1, msr_subject_2, msr_subject_3, msr_subject_4) if s is not None]
+        if msr_subjects and msr_background is None:
+            raise ValueError("[LTXDirectorGuide] MSR: msr_background is required when any msr_subject is connected.")
+        msr_active = msr_background is not None and len(msr_subjects) > 0
+        if msr_active and is_retake_active:
+            log.warning("[LTXDirectorGuide] MSR inputs are ignored in Retake Mode.")
+            msr_active = False
+
+        # Track-gated LoRA loading: each LoRA is applied ONLY when its track has content, so an
+        # unused track never patches the model. Both can chain (control first, identity second).
+        timeline_used = len(images) > 0 or len(segments) > 0 or is_retake_active
         latent_downscale_factor = 1.0
-        if model is not None and ic_lora_name != "None":
+        ic_lora_applied = False
+        if model is not None and ic_lora_name != "None" and timeline_used:
             model, latent_downscale_factor = _load_lora_model_only(model, ic_lora_name, ic_lora_strength)
+            ic_lora_applied = True
+        elif ic_lora_name != "None":
+            log.info("[LTXDirectorGuide] ic_lora '%s' not applied (no timeline guides or no model connected).", ic_lora_name)
+
+        msr_downscale_factor = 1.0
+        msr_lora_applied = False
+        if model is not None and msr_lora_name != "None" and msr_active:
+            model, msr_downscale_factor = _load_lora_model_only(model, msr_lora_name, msr_lora_strength)
+            msr_lora_applied = True
+        elif msr_lora_name != "None" and not msr_active:
+            log.info("[LTXDirectorGuide] msr_lora '%s' not applied (no MSR images connected).", msr_lora_name)
+        if msr_active and not msr_lora_applied:
+            log.warning(
+                "[LTXDirectorGuide] MSR images are connected but no MSR LoRA is applied here "
+                "(msr_lora_name is None or no model connected). The MSR guide only works with the "
+                "MSR IC-LoRA active — chain it upstream or set msr_lora_name."
+            )
 
         scale_factors = vae.downscale_index_formula
         latent_image = latent["samples"].clone()
@@ -333,32 +414,17 @@ class LTXDirectorGuide:
 
         # IC-LoRA correctness only: snap the latent grid to the IC-LoRA downscale factor so the
         # reference encoding aligns. Not user scaling — runs solely when an IC-LoRA is active.
-        if auto_snap_ic_grid and model is not None and ic_lora_name != "None":
+        if auto_snap_ic_grid and ic_lora_applied:
             latent_image, noise_mask = _snap_latent_to_downscale(latent_image, noise_mask, latent_downscale_factor, "bicubic")
 
         _, _, latent_length, latent_height, latent_width = latent_image.shape
         initial_latent_length = int(latent_length)
 
-        # Parse timeline JSON to see if retake mode is active in UI
-        import json
-        timeline_data_str = guide_data.get("timeline_data", "{}") if guide_data else "{}"
-        try:
-            tdata = json.loads(timeline_data_str)
-        except Exception:
-            tdata = {}
-        
-        is_retake_active = bool(retake_mode) or tdata.get("retakeMode", False)
         is_empty_latent = (latent_image.abs().max().item() < 1e-5)
 
-        # Director image guides and motion video segments
-        images = guide_data.get("images", []) if guide_data else []
-        insert_frames = guide_data.get("insert_frames", []) if guide_data else []
-        strengths = guide_data.get("strengths", []) if guide_data else []
-        
         director_fps = float((motion_guide_data or {}).get("frame_rate", guide_data.get("frame_rate", 24) if guide_data else 24))
-        segments = (motion_guide_data or {}).get("segments", [])
-        
-        is_lora_active = (model is not None) and (ic_lora_name != "None")
+
+        is_lora_active = ic_lora_applied or msr_lora_applied
         time_scale_factor = scale_factors[0]
         ltxv_length = (latent_length - 1) * time_scale_factor + 1
 
@@ -479,13 +545,46 @@ class LTXDirectorGuide:
         # to the latent stream using standard LTX-Video cross-attention conditioning.
         # Registers guide attention entries if IC-LoRA is active.
         # -----------------------------------------------------------------------
-        if len(images) > 0 or len(segments) > 0:
-            print(f"[LTXDirectorGuide] Using Appended Keyframe Guidance. is_lora_active: {is_lora_active}")
+        if len(images) > 0 or len(segments) > 0 or msr_active:
+            print(f"[LTXDirectorGuide] Using Appended Keyframe Guidance. is_lora_active: {is_lora_active}, msr_active: {msr_active}")
+
+            target_pix_w = int(latent_width * 32)
+            target_pix_h = int(latent_height * 32)
+
+            # A0. MSR reference clip — composed subjects + background, injected at frame 0 with
+            # strength 1.0 and the MSR LoRA's own downscale factor, matching the official
+            # Licon-MSR sample (LTXAddVideoICLoRAGuide frame_idx=0, strength=1, factor=1).
+            if msr_active:
+                msr_frames = _build_msr_guide(msr_subjects, msr_background, target_pix_w, target_pix_h, msr_frame_count)
+                _, msr_guide_latent = _encode_video_iclora_guide(
+                    vae, latent_width, latent_height, msr_frames, scale_factors,
+                    msr_downscale_factor, crop, use_tiled_encode, tile_size, tile_overlap,
+                    resize_method=active_resize_method,
+                )
+                if msr_guide_latent.shape[2] > latent_length:
+                    msr_guide_latent = msr_guide_latent[:, :, :latent_length]
+                msr_guide_shape = list(msr_guide_latent.shape[2:])
+
+                B_g, _, F_g, H_g, W_g = msr_guide_latent.shape
+                msr_guide_mask = torch.ones((B_g, 1, F_g, H_g, W_g), device=msr_guide_latent.device, dtype=msr_guide_latent.dtype)
+                msr_ldf = int(max(1, round(float(msr_downscale_factor))))
+                if msr_ldf > 1:
+                    dilated = _dilate_latent({"samples": msr_guide_latent, "noise_mask": msr_guide_mask}, horizontal_scale=msr_ldf, vertical_scale=msr_ldf)
+                    msr_guide_mask = dilated["noise_mask"]
+                    msr_guide_latent = dilated["samples"]
+
+                tokens_added = msr_guide_latent.shape[2] * msr_guide_latent.shape[3] * msr_guide_latent.shape[4]
+                positive, negative, latent_image, noise_mask = nodes_lt.LTXVAddGuide.append_keyframe(
+                    positive, negative, 0, latent_image, noise_mask, msr_guide_latent, 1.0, scale_factors,
+                    guide_mask=msr_guide_mask, latent_downscale_factor=float(msr_downscale_factor), causal_fix=True,
+                )
+                if is_lora_active:
+                    positive = _append_guide_attention_entry(positive, tokens_added, msr_guide_shape, attention_strength=msr_attention_strength)
+                    negative = _append_guide_attention_entry(negative, tokens_added, msr_guide_shape, attention_strength=msr_attention_strength)
+                print(f"[LTXDirectorGuide] MSR guide injected: {len(msr_subjects)} subject(s) + background, {int(msr_frame_count)} frames -> latent {msr_guide_shape} at frame 0.")
 
             # A. Process Image Guides — images arrive RAW from the Director. Resize them to
             # THIS stage's resolution and compress here (the only place compression happens).
-            target_pix_w = int(latent_width * 32)
-            target_pix_h = int(latent_height * 32)
             for idx, img_tensor in enumerate(images):
                 f_idx = insert_frames[idx] if idx < len(insert_frames) else 0
                 strength = float(strengths[idx] if idx < len(strengths) else 1.0)
