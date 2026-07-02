@@ -367,7 +367,7 @@ class LTXDirectorGuide:
                 "msr_subject_3": ("IMAGE", {"tooltip": "MSR subject reference 3."}),
                 "msr_subject_4": ("IMAGE", {"tooltip": "MSR subject reference 4."}),
                 "msr_background": ("IMAGE", {"tooltip": "MSR background / scene reference. REQUIRED when any msr_subject is connected."}),
-                "msr_frame_count": ([17, 25, 33, 41], {"default": 17, "tooltip": "Frames in the composed MSR reference clip (split across subjects + background)."}),
+                "msr_frame_count": ("INT", {"default": 17, "min": 17, "max": 41, "step": 8, "tooltip": "Frames in the composed MSR reference clip (split across subjects + background). Valid values: 17, 25, 33, 41 — anything else snaps to the nearest."}),
                 "msr_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Guide-attention strength for the MSR reference tokens."}),
             }
         }
@@ -400,6 +400,13 @@ class LTXDirectorGuide:
         insert_frames = guide_data.get("insert_frames", []) if guide_data else []
         strengths = guide_data.get("strengths", []) if guide_data else []
         segments = (motion_guide_data or {}).get("segments", [])
+
+        # MSR frame count must be one of the trained reference lengths; snap anything else.
+        try:
+            msr_frame_count = int(msr_frame_count)
+        except (TypeError, ValueError):
+            msr_frame_count = 17
+        msr_frame_count = min((17, 25, 33, 41), key=lambda v: abs(v - msr_frame_count))
 
         # MSR track: active only when a background AND at least one subject are provided —
         # via the msr_* IMAGE ports, or via the Director's MSR panel (timeline_data), ports win.
