@@ -183,6 +183,37 @@ def _expand_msr_frames(images, frame_count):
         frames.extend([image] * repeats)
     return frames
 
+def _load_msr_panel_image(image_file):
+    from PIL import Image
+    file_path = os.path.join(folder_paths.get_input_directory(), image_file)
+    if not os.path.exists(file_path):
+        raise ValueError(f"[LTXDirectorGuide] MSR panel image not found in the input folder: {image_file}")
+    img = Image.open(file_path).convert("RGB")
+    arr = np.array(img, dtype=np.float32) / 255.0
+    return torch.from_numpy(arr).unsqueeze(0)
+
+def _load_msr_panel(tdata, default_frame_count):
+    """Read the Director's MSR panel out of timeline_data (subjects/background uploaded to the
+    ComfyUI input folder by the JS panel). Runs only when no msr_* IMAGE ports are connected —
+    explicit graph wiring wins. Missing files raise: a silent black reference would quietly
+    destroy the identity lock."""
+    panel = tdata.get("msr") or {}
+    subject_files = [f for f in (panel.get("subjects") or []) if f]
+    background_file = panel.get("background") or ""
+    if not subject_files and not background_file:
+        return [], None, default_frame_count
+    if not subject_files or not background_file:
+        raise ValueError("[LTXDirectorGuide] MSR panel: at least one subject AND a background are required.")
+    subjects = [_load_msr_panel_image(f) for f in subject_files[:4]]
+    background = _load_msr_panel_image(background_file)
+    try:
+        frame_count = int(panel.get("frameCount", default_frame_count) or default_frame_count)
+    except (TypeError, ValueError):
+        frame_count = default_frame_count
+    if frame_count not in (17, 25, 33, 41):
+        frame_count = default_frame_count
+    return subjects, background, frame_count
+
 def _build_msr_guide(subjects, background, width, height, frame_count):
     """Compose the MSR reference clip: 1-4 subject stills + a background still, each resized to
     width x height, expanded to frame_count frames. Returns [frame_count, H, W, 3] float32."""
@@ -370,10 +401,13 @@ class LTXDirectorGuide:
         strengths = guide_data.get("strengths", []) if guide_data else []
         segments = (motion_guide_data or {}).get("segments", [])
 
-        # MSR track: active only when a background AND at least one subject are connected.
+        # MSR track: active only when a background AND at least one subject are provided —
+        # via the msr_* IMAGE ports, or via the Director's MSR panel (timeline_data), ports win.
         msr_subjects = [s for s in (msr_subject_1, msr_subject_2, msr_subject_3, msr_subject_4) if s is not None]
         if msr_subjects and msr_background is None:
             raise ValueError("[LTXDirectorGuide] MSR: msr_background is required when any msr_subject is connected.")
+        if not msr_subjects and msr_background is None:
+            msr_subjects, msr_background, msr_frame_count = _load_msr_panel(tdata, msr_frame_count)
         msr_active = msr_background is not None and len(msr_subjects) > 0
         if msr_active and is_retake_active:
             log.warning("[LTXDirectorGuide] MSR inputs are ignored in Retake Mode.")

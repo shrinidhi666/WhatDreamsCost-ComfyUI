@@ -673,7 +673,8 @@ function parseInitial(jsonStr) {
     retakeStrength: 1.0,
     retakeVideo: null,
     normalStartFrame: 0,
-    normalDurationFrames: 120
+    normalDurationFrames: 120,
+    msr: null
   };
   try {
     if (jsonStr) {
@@ -696,6 +697,16 @@ function parseInitial(jsonStr) {
       if (p.retakeVideo !== undefined) parsed.retakeVideo = p.retakeVideo;
       if (p.normalStartFrame !== undefined) parsed.normalStartFrame = p.normalStartFrame;
       if (p.normalDurationFrames !== undefined) parsed.normalDurationFrames = p.normalDurationFrames;
+      if (p.msr && typeof p.msr === "object") {
+        const fc = parseInt(p.msr.frameCount, 10);
+        parsed.msr = {
+          subjects: Array.isArray(p.msr.subjects)
+            ? p.msr.subjects.slice(0, 4).map(s => (typeof s === "string" ? s : ""))
+            : ["", "", "", ""],
+          background: typeof p.msr.background === "string" ? p.msr.background : "",
+          frameCount: [17, 25, 33, 41].includes(fc) ? fc : 17,
+        };
+      }
       if (Array.isArray(p.segments)) {
         parsed.segments = p.segments.map(s => {
           const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
@@ -2240,6 +2251,16 @@ class TimelineEditor {
     uploadMotionBtn.addEventListener("click", () => this.motionFileInput.click());
     this.uploadMotionBtn = uploadMotionBtn;
 
+    const msrBtn = document.createElement("button");
+    msrBtn.className = "pr-btn";
+    msrBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> MSR`;
+    msrBtn.title = "Toggle the MSR (multi-subject reference) panel — clip-global identity references";
+    msrBtn.addEventListener("click", () => {
+      this.msrPanelVisible = !this.msrPanelVisible;
+      this._updateMsrPanelVisibility();
+    });
+    this.msrBtn = msrBtn;
+
     const uploadVideoBtn = document.createElement("button");
     uploadVideoBtn.className = "pr-btn";
     uploadVideoBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg> Add Video`;
@@ -2267,6 +2288,7 @@ class TimelineEditor {
     actionGroup.appendChild(uploadAudioBtn);
     actionGroup.appendChild(uploadVideoBtn);
     actionGroup.appendChild(uploadMotionBtn);
+    actionGroup.appendChild(msrBtn);
     actionGroup.appendChild(deleteBtn);
 
     // Retake-mode-only delete button (shown next to Add Video when retakeMode is on)
@@ -3726,6 +3748,7 @@ class TimelineEditor {
     this.layoutContainer.appendChild(this.viewport);
 
     this.wrapper.appendChild(toolbar);
+    this.wrapper.appendChild(this._buildMsrPanel());
     this.wrapper.appendChild(this.layoutContainer);
 
 
@@ -3896,6 +3919,181 @@ class TimelineEditor {
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
     return { x, y };
+  }
+
+  // --- MSR (Multi-Subject Reference) panel ---
+  // Clip-global identity references (subject 1-4 + background) serialized into
+  // timeline_data.msr and read by the LTX Director Guide node. Not a timeline track:
+  // MSR references apply to the whole clip, so they live in a panel, not on the timeline.
+
+  _ensureMsr() {
+    if (!this.timeline.msr) {
+      this.timeline.msr = { subjects: ["", "", "", ""], background: "", frameCount: 17 };
+    }
+    if (!Array.isArray(this.timeline.msr.subjects)) this.timeline.msr.subjects = ["", "", "", ""];
+    while (this.timeline.msr.subjects.length < 4) this.timeline.msr.subjects.push("");
+    return this.timeline.msr;
+  }
+
+  _msrHasContent() {
+    const m = this.timeline ? this.timeline.msr : null;
+    return !!(m && (m.background || (m.subjects || []).some(s => s)));
+  }
+
+  _msrSlotUrl(imageFile) {
+    if (!imageFile) return "";
+    const idx = imageFile.lastIndexOf("/");
+    const subfolder = idx >= 0 ? imageFile.slice(0, idx) : "";
+    const filename = idx >= 0 ? imageFile.slice(idx + 1) : imageFile;
+    return api.apiURL(`/view?filename=${encodeURIComponent(filename)}&type=input&subfolder=${encodeURIComponent(subfolder)}`);
+  }
+
+  async _msrUploadFile(file, slotKey) {
+    if (!file || !file.type.startsWith("image/")) return;
+    try {
+      const body = new FormData();
+      body.append("image", file);
+      body.append("subfolder", "whatdreamscost");
+      const resp = await api.fetchApi("/upload/image", { method: "POST", body });
+      if (resp.status !== 200) return;
+      const data = await resp.json();
+      const imageFile = (data.subfolder ? data.subfolder + "/" : "") + data.name;
+      const msr = this._ensureMsr();
+      if (slotKey === "background") msr.background = imageFile;
+      else msr.subjects[slotKey] = imageFile;
+      this.commitChanges();
+      this._refreshMsrPanel();
+    } catch (e) {
+      console.error("[LTXDirector] MSR upload failed:", e);
+    }
+  }
+
+  _msrClearSlot(slotKey) {
+    const msr = this._ensureMsr();
+    if (slotKey === "background") msr.background = "";
+    else msr.subjects[slotKey] = "";
+    this.commitChanges();
+    this._refreshMsrPanel();
+  }
+
+  _updateMsrPanelVisibility() {
+    if (this.msrPanel) {
+      this.msrPanel.style.display = this.msrPanelVisible ? "flex" : "none";
+    }
+  }
+
+  _buildMsrPanel() {
+    const panel = document.createElement("div");
+    panel.className = "pr-msr-panel";
+    panel.style.cssText = "display:none;gap:6px;align-items:center;padding:6px 8px;background:#1b1b1b;border-bottom:1px solid #333;flex-wrap:wrap;";
+    this.msrPanel = panel;
+
+    const label = document.createElement("div");
+    label.textContent = "MSR refs";
+    label.title = "Multi-Subject Reference (Licon-MSR): identity references for the whole clip. Needs at least one subject AND a background, plus the MSR LoRA selected on the LTX Director Guide node.";
+    label.style.cssText = "font-size:11px;color:#aaa;margin-right:4px;";
+    panel.appendChild(label);
+
+    this._msrSlots = {};
+    const mkSlot = (slotKey, text) => {
+      const slot = document.createElement("div");
+      slot.style.cssText = "width:52px;height:52px;border:1px dashed #555;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#888;cursor:pointer;background-size:cover;background-position:center;position:relative;";
+      slot.title = `${text}: click or drop an image`;
+
+      const cap = document.createElement("span");
+      cap.textContent = text;
+      cap.style.pointerEvents = "none";
+      slot.appendChild(cap);
+
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.style.display = "none";
+      input.addEventListener("change", (e) => {
+        if (e.target.files && e.target.files[0]) this._msrUploadFile(e.target.files[0], slotKey);
+        input.value = "";
+      });
+      slot.appendChild(input);
+
+      const clear = document.createElement("div");
+      clear.textContent = "×";
+      clear.title = "Remove this reference";
+      clear.style.cssText = "position:absolute;top:-6px;right:-6px;width:14px;height:14px;line-height:12px;text-align:center;border-radius:50%;background:#c33;color:#fff;font-size:11px;display:none;cursor:pointer;z-index:2;";
+      clear.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._msrClearSlot(slotKey);
+      });
+      slot.appendChild(clear);
+
+      slot.addEventListener("click", () => input.click());
+      slot.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); slot.style.borderColor = "#8cf"; });
+      slot.addEventListener("dragleave", () => { slot.style.borderColor = "#555"; });
+      slot.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        slot.style.borderColor = "#555";
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+          this._msrUploadFile(e.dataTransfer.files[0], slotKey);
+        }
+      });
+
+      this._msrSlots[slotKey] = { slot, cap, clear };
+      panel.appendChild(slot);
+    };
+    for (let i = 0; i < 4; i++) mkSlot(i, `Subj ${i + 1}`);
+    mkSlot("background", "BG");
+
+    const fcLabel = document.createElement("div");
+    fcLabel.textContent = "frames";
+    fcLabel.style.cssText = "font-size:10px;color:#888;margin-left:6px;";
+    panel.appendChild(fcLabel);
+
+    const fcSelect = document.createElement("select");
+    fcSelect.title = "Frames in the composed MSR reference clip (split across subjects + background)";
+    fcSelect.style.cssText = "background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;";
+    for (const v of [17, 25, 33, 41]) {
+      const opt = document.createElement("option");
+      opt.value = String(v);
+      opt.textContent = String(v);
+      fcSelect.appendChild(opt);
+    }
+    fcSelect.addEventListener("change", () => {
+      this._ensureMsr().frameCount = parseInt(fcSelect.value, 10) || 17;
+      this.commitChanges();
+    });
+    this._msrFrameCountSelect = fcSelect;
+    panel.appendChild(fcSelect);
+
+    // Restore state from timeline_data and show the panel when it already has content.
+    this.msrPanelVisible = this._msrHasContent();
+    this._refreshMsrPanel();
+    this._updateMsrPanelVisibility();
+
+    return panel;
+  }
+
+  _refreshMsrPanel() {
+    if (!this.msrPanel || !this._msrSlots) return;
+    const m = this.timeline.msr || { subjects: [], background: "", frameCount: 17 };
+    for (const slotKey of [0, 1, 2, 3, "background"]) {
+      const s = this._msrSlots[slotKey];
+      if (!s) continue;
+      const val = slotKey === "background" ? (m.background || "") : ((m.subjects || [])[slotKey] || "");
+      if (val) {
+        s.slot.style.backgroundImage = `url("${this._msrSlotUrl(val)}")`;
+        s.slot.style.borderStyle = "solid";
+        s.cap.style.display = "none";
+        s.clear.style.display = "block";
+      } else {
+        s.slot.style.backgroundImage = "";
+        s.slot.style.borderStyle = "dashed";
+        s.cap.style.display = "";
+        s.clear.style.display = "none";
+      }
+    }
+    if (this._msrFrameCountSelect) {
+      this._msrFrameCountSelect.value = String([17, 25, 33, 41].includes(parseInt(m.frameCount, 10)) ? parseInt(m.frameCount, 10) : 17);
+    }
   }
 
   // --- Async Image Upload Logic (Handles multiple images simultaneously) ---
@@ -8835,6 +9033,11 @@ class TimelineEditor {
       } : null,
       normalStartFrame: this.timeline.normalStartFrame,
       normalDurationFrames: this.timeline.normalDurationFrames,
+      msr: this._msrHasContent() ? {
+        subjects: (this.timeline.msr.subjects || []).slice(0, 4).map(s => s || ""),
+        background: this.timeline.msr.background || "",
+        frameCount: parseInt(this.timeline.msr.frameCount, 10) || 17,
+      } : null,
       segments: sortedSegments.map(s => {
         const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
         return rest;

@@ -3,6 +3,11 @@
 Branch: `feat/msr-track` (off `main` @ `9cdbcf0`, clean).
 Fork: `git@github.com:shrinidhi666/WhatDreamsCost-ComfyUI.git`.
 
+STATUS: Stage 1 (Python track) and Stage 2 (MSR panel UI + timeline_data read) are IMPLEMENTED on
+this branch. Hermetic tests pass (import, compositor shape/split/order parity with LiconMSR,
+port + panel guardrails, missing-file raise, inert paths). Remaining: the LIVE verification
+matrix below (user-launched, GPU free), then merge to main.
+
 ## Goal
 MSR (1–4 subject refs + background) as a fully **additive, optional** track in `LTXDirectorGuide`,
 composable à la carte with ALL other Director features:
