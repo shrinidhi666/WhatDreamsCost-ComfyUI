@@ -3,10 +3,13 @@
 Branch: `feat/msr-track` (off `main` @ `9cdbcf0`, clean).
 Fork: `git@github.com:shrinidhi666/WhatDreamsCost-ComfyUI.git`.
 
-STATUS: Stage 1 (Python track) and Stage 2 (MSR panel UI + timeline_data read) are IMPLEMENTED on
-this branch. Hermetic tests pass (import, compositor shape/split/order parity with LiconMSR,
-port + panel guardrails, missing-file raise, inert paths). Remaining: the LIVE verification
-matrix below (user-launched, GPU free), then merge to main.
+STATUS: IMPLEMENTED on this branch. DESIGN REVISION (user decision): the msr_* IMAGE ports on the
+Guide were removed — the Director's MSR panel (timeline_data.msr) is the SINGLE source for MSR
+references (subjects, background, frame count). The Guide keeps only the model/sampling-side
+knobs: msr_lora_name, msr_lora_strength, msr_attention_strength. One path, no duplication.
+Hermetic + execute-level tests pass (mock VAE: pass-through byte-identical, panel injection
+appends 3 latent frames with crop metadata + keyframe_idxs, guardrails raise). Remaining: the
+LIVE verification matrix below (user-launched, GPU free), then merge to main.
 
 ## Goal
 MSR (1–4 subject refs + background) as a fully **additive, optional** track in `LTXDirectorGuide`,

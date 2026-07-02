@@ -194,9 +194,8 @@ def _load_msr_panel_image(image_file):
 
 def _load_msr_panel(tdata, default_frame_count):
     """Read the Director's MSR panel out of timeline_data (subjects/background uploaded to the
-    ComfyUI input folder by the JS panel). Runs only when no msr_* IMAGE ports are connected —
-    explicit graph wiring wins. Missing files raise: a silent black reference would quietly
-    destroy the identity lock."""
+    ComfyUI input folder by the JS panel) — the single source for MSR references. Missing files
+    raise: a silent black reference would quietly destroy the identity lock."""
     panel = tdata.get("msr") or {}
     subject_files = [f for f in (panel.get("subjects") or []) if f]
     background_file = panel.get("background") or ""
@@ -360,14 +359,8 @@ class LTXDirectorGuide:
                 "tile_size": ("INT", {"default": 256, "min": 64, "max": 512, "step": 32}),
                 "tile_overlap": ("INT", {"default": 64, "min": 16, "max": 256, "step": 16}),
                 "retake_mode": ("BOOLEAN", {"default": False, "tooltip": "Force Retake Mode. If false, it will still auto-detect Retake Mode from the timeline data."}),
-                "msr_lora_name": (["None"] + loras, {"default": "None", "tooltip": "Licon-MSR (multi-subject reference) IC-LoRA. Chained on top of ic_lora_name and applied ONLY when MSR images are connected."}),
+                "msr_lora_name": (["None"] + loras, {"default": "None", "tooltip": "Licon-MSR (multi-subject reference) IC-LoRA. Chained on top of ic_lora_name and applied ONLY when MSR references are set on the Director's MSR panel."}),
                 "msr_lora_strength": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
-                "msr_subject_1": ("IMAGE", {"tooltip": "MSR subject reference 1 (identity lock)."}),
-                "msr_subject_2": ("IMAGE", {"tooltip": "MSR subject reference 2."}),
-                "msr_subject_3": ("IMAGE", {"tooltip": "MSR subject reference 3."}),
-                "msr_subject_4": ("IMAGE", {"tooltip": "MSR subject reference 4."}),
-                "msr_background": ("IMAGE", {"tooltip": "MSR background / scene reference. REQUIRED when any msr_subject is connected."}),
-                "msr_frame_count": ("INT", {"default": 17, "min": 17, "max": 41, "step": 8, "tooltip": "Frames in the composed MSR reference clip (split across subjects + background). Valid values: 17, 25, 33, 41 — anything else snaps to the nearest."}),
                 "msr_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Guide-attention strength for the MSR reference tokens."}),
             }
         }
@@ -377,7 +370,7 @@ class LTXDirectorGuide:
     FUNCTION = "execute"
 
     @classmethod
-    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False, msr_lora_name="None", msr_lora_strength=1.0, msr_subject_1=None, msr_subject_2=None, msr_subject_3=None, msr_subject_4=None, msr_background=None, msr_frame_count=17, msr_attention_strength=1.0):
+    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False, msr_lora_name="None", msr_lora_strength=1.0, msr_attention_strength=1.0):
         motion_segments = (motion_guide_data or {}).get("segments", []) if motion_guide_data else []
         image_guides_count = len(guide_data.get("images", [])) if guide_data else 0
         print(f"[LTXDirectorGuide] execute started. motion_segments: {len(motion_segments)}, image_guides: {image_guides_count}, ic_lora_name: {ic_lora_name}, model connected: {model is not None}, retake_mode: {retake_mode}")
@@ -401,22 +394,9 @@ class LTXDirectorGuide:
         strengths = guide_data.get("strengths", []) if guide_data else []
         segments = (motion_guide_data or {}).get("segments", [])
 
-        # MSR frame count must be one of the trained reference lengths; snap anything else.
-        try:
-            msr_frame_count = int(msr_frame_count)
-        except (TypeError, ValueError):
-            msr_frame_count = 17
-        msr_frame_count = min((17, 25, 33, 41), key=lambda v: abs(v - msr_frame_count))
-
-        # MSR track: active only when a background AND at least one subject are provided —
-        # via the msr_* IMAGE ports, or via the Director's MSR panel (timeline_data), ports win.
-        msr_subjects = [s for s in (msr_subject_1, msr_subject_2, msr_subject_3, msr_subject_4) if s is not None]
-        if msr_subjects and msr_background is None:
-            raise ValueError("[LTXDirectorGuide] MSR: msr_background is required when any msr_subject is connected.")
-        if msr_background is not None and not msr_subjects:
-            raise ValueError("[LTXDirectorGuide] MSR: at least one msr_subject is required when msr_background is connected.")
-        if not msr_subjects and msr_background is None:
-            msr_subjects, msr_background, msr_frame_count = _load_msr_panel(tdata, msr_frame_count)
+        # MSR track: subjects + background + frame count come from the Director's MSR panel
+        # (timeline_data.msr) — the single source for MSR references.
+        msr_subjects, msr_background, msr_frame_count = _load_msr_panel(tdata, 17)
         msr_active = msr_background is not None and len(msr_subjects) > 0
         if msr_active and is_retake_active:
             log.warning("[LTXDirectorGuide] MSR inputs are ignored in Retake Mode.")
@@ -439,12 +419,12 @@ class LTXDirectorGuide:
             model, msr_downscale_factor = _load_lora_model_only(model, msr_lora_name, msr_lora_strength)
             msr_lora_applied = True
         elif msr_lora_name != "None" and not msr_active:
-            log.info("[LTXDirectorGuide] msr_lora '%s' not applied (no MSR images connected).", msr_lora_name)
+            log.info("[LTXDirectorGuide] msr_lora '%s' not applied (no MSR references on the Director panel).", msr_lora_name)
         if msr_active and not msr_lora_applied:
             log.warning(
-                "[LTXDirectorGuide] MSR images are connected but no MSR LoRA is applied here "
-                "(msr_lora_name is None or no model connected). The MSR guide only works with the "
-                "MSR IC-LoRA active — chain it upstream or set msr_lora_name."
+                "[LTXDirectorGuide] MSR references are set on the Director panel but no MSR LoRA "
+                "is applied here (msr_lora_name is None or no model connected). The MSR guide only "
+                "works with the MSR IC-LoRA active — chain it upstream or set msr_lora_name."
             )
 
         scale_factors = vae.downscale_index_formula
