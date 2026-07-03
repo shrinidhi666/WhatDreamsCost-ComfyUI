@@ -213,14 +213,20 @@ def _load_msr_panel(tdata, default_frame_count):
         frame_count = default_frame_count
     return subjects, background, frame_count
 
-def _build_msr_guide(subjects, background, width, height, frame_count):
+def _build_msr_guide(subjects, background, width, height, frame_count, resize_method="stretch to fit"):
     """Compose the MSR reference clip: 1-4 subject stills + a background still, each resized to
-    width x height, expanded to frame_count frames. Returns [frame_count, H, W, 3] float32."""
+    width x height, expanded to frame_count frames. Returns [frame_count, H, W, 3] float32.
+    `resize_method` fits each reference to the target: "stretch to fit" is LiconMSR's own
+    behavior (cv2.resize -- distorts on aspect mismatch); "crop" center-crops to fill (no
+    distortion, matches the official sample's crop=center); "pad"/"pad green" letterbox.
+    Every method yields exactly width x height so the frames stack."""
+    if resize_method == "maintain aspect ratio":
+        resize_method = "pad"  # must end exactly WxH to stack; no-pad fitting cannot
     prepared = []
     for img in [*subjects, background]:
         t = img[:1] if img.ndim == 4 else img.unsqueeze(0)
         t = t[..., :3].float()
-        t = _resize_image(t, width, height, "stretch to fit", 1, "lanczos")
+        t = _resize_image(t, width, height, resize_method, 1, "lanczos")
         prepared.append(t[0])
     frames = _expand_msr_frames(prepared, int(frame_count))
     return torch.stack(frames, dim=0)
@@ -362,6 +368,7 @@ class LTXDirectorGuide:
                 "msr_lora_name": (["None"] + loras, {"default": "None", "tooltip": "Licon-MSR (multi-subject reference) IC-LoRA. Chained on top of ic_lora_name and applied ONLY when MSR references are set on the Director's MSR panel."}),
                 "msr_lora_strength": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
                 "msr_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Guide-attention strength for the MSR reference tokens."}),
+                "msr_resize_method": (["crop", "stretch to fit", "pad", "pad green"], {"default": "crop", "tooltip": "How each MSR reference is fitted to the video's aspect. crop = center-crop, no distortion (the official sample's behavior; best for refs of mixed aspect ratios). stretch to fit = LiconMSR's own behavior, distorts on aspect mismatch. pad / pad green = letterbox."}),
             }
         }
 
@@ -370,7 +377,7 @@ class LTXDirectorGuide:
     FUNCTION = "execute"
 
     @classmethod
-    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False, msr_lora_name="None", msr_lora_strength=1.0, msr_attention_strength=1.0):
+    def execute(cls, positive, negative, vae, latent, guide_data, motion_guide_data=None, model=None, ic_lora_name="None", ic_lora_strength=1.0, image_resize_method="lanczos", resize_method="maintain aspect ratio", image_width=0, image_height=0, img_compression=18, image_attention_strength=1.0, crop="center", auto_snap_ic_grid=True, use_tiled_encode=False, tile_size=256, tile_overlap=64, retake_mode=False, msr_lora_name="None", msr_lora_strength=1.0, msr_attention_strength=1.0, msr_resize_method="crop"):
         motion_segments = (motion_guide_data or {}).get("segments", []) if motion_guide_data else []
         image_guides_count = len(guide_data.get("images", [])) if guide_data else 0
         print(f"[LTXDirectorGuide] execute started. motion_segments: {len(motion_segments)}, image_guides: {image_guides_count}, ic_lora_name: {ic_lora_name}, model connected: {model is not None}, retake_mode: {retake_mode}")
@@ -578,7 +585,7 @@ class LTXDirectorGuide:
             # strength 1.0 and the MSR LoRA's own downscale factor, matching the official
             # Licon-MSR sample (LTXAddVideoICLoRAGuide frame_idx=0, strength=1, factor=1).
             if msr_active:
-                msr_frames = _build_msr_guide(msr_subjects, msr_background, target_pix_w, target_pix_h, msr_frame_count)
+                msr_frames = _build_msr_guide(msr_subjects, msr_background, target_pix_w, target_pix_h, msr_frame_count, resize_method=msr_resize_method)
                 _, msr_guide_latent = _encode_video_iclora_guide(
                     vae, latent_width, latent_height, msr_frames, scale_factors,
                     msr_downscale_factor, crop, use_tiled_encode, tile_size, tile_overlap,
