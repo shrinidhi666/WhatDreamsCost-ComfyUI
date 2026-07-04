@@ -51,20 +51,22 @@ No MSR inputs connected → the node behaves byte-identically to today.
 
 ## Design
 
-### New optional inputs on `LTXDirectorGuide`
+### New inputs on `LTXDirectorGuide` (widgets only — NO image ports; single path = the panel)
 - `msr_lora_name`: combo `["None"] + loras`, default "None" — the Licon-MSR LoRA, **separate slot**
   from `ic_lora_name` so depth-video (union control, rdf=2) and MSR (rdf=1) can run together.
 - `msr_lora_strength`: FLOAT, default 1.0.
-- `msr_subject_1..4`: IMAGE, optional.
-- `msr_background`: IMAGE, optional.
-- `msr_frame_count`: combo [17, 25, 33, 41], default 17.
 - `msr_attention_strength`: FLOAT 0–1, default 1.0 (same rail as image/video attention strengths).
+- `msr_resize_method`: combo [crop, stretch to fit, pad, pad green], default **crop** — how each
+  reference is fitted to the video's aspect (crop = the official sample's behavior, no distortion).
+- Subjects, background and frame_count come ONLY from the Director's MSR panel via
+  `timeline_data.msr` (the `msr_subject_1..4`/`msr_background`/`msr_frame_count` ports of the
+  first draft were REMOVED — one path, no duplication).
 
 ### Track-gated LoRA loading (LoRAs used ONLY when their track has content)
-- `ic_lora_name` is applied **only if** motion segments exist in `motion_guide_data`
-  (today it loads whenever model+name are set, even with an empty motion track — fix that as part
-  of this: it's the same "additive" principle).
-- `msr_lora_name` is applied **only if** `msr_background` + ≥1 `msr_subject_*` are connected.
+- `ic_lora_name` is applied **only if** the timeline has guides (images/motion/retake)
+  (previously it loaded whenever model+name were set, even with an empty timeline — fixed here:
+  same "additive" principle).
+- `msr_lora_name` is applied **only if** the MSR panel has a background + ≥1 subject.
 - Both present → chain: `model → ic_lora → msr_lora` (order: control first, identity second;
   chaining order of summed LoRA patches is mathematically commutative in ComfyUI).
 - Neither track used → model passes through untouched.
@@ -97,11 +99,14 @@ it rides the conditioning built in the Director, not this gate).
   downstream contract.
 - `is_lora_active` (gates attention entries on image guides) becomes "ic OR msr active".
 
-### Guardrails
-- Any `msr_subject_*` without `msr_background` → clear ValueError (mirrors LiconMSR:31–32).
-- MSR images connected but `msr_lora_name` == "None" → hard warning in the log (guide without its
-  LoRA degrades output); do not silently proceed as if fine.
-- `msr_lora_name` selected but no MSR images → LoRA not applied (track-gating), log info line.
+### Guardrails (all in `_load_msr_panel` / execute — panel is the single source)
+- Panel has subjects without a background (or a background without subjects) → clear ValueError
+  (mirrors LiconMSR:31–32).
+- A panel image file missing from the input folder → ValueError (a silent black reference would
+  quietly destroy the identity lock).
+- MSR refs set but `msr_lora_name` == "None" → hard warning in the log (guide without its LoRA
+  degrades output); do not silently proceed as if fine.
+- `msr_lora_name` selected but no MSR refs on the panel → LoRA not applied (track-gating), info log.
 
 ### What stays exactly as-is
 - Image keyframes (first/mid/last) — untouched; optional as today via the timeline.
@@ -130,8 +135,8 @@ exists and gets reused, verified in code:
 - **Python read**: `LTXDirectorGuide.execute` ALREADY parses `timeline_data` (line 343–348). Load
   the files with the same pattern as `_load_image_tensor` (`ltx_director.py:394` — input-folder
   path, base64 fallback) and feed `_build_msr_guide`.
-- **Precedence**: connected `msr_subject_*`/`msr_background` IMAGE ports override the panel
-  (explicit graph wiring wins); panel used when ports are empty. Both feed the same code path.
+- **Single source**: the panel is the ONLY way to supply MSR references (the draft's IMAGE-port
+  precedence scheme died with the ports — user decision: one path, no confusion).
 This keeps Stage 2 additive JS (a panel + serialize) instead of surgery on the segment engine.
 `msr_lora_name` stays a node widget (LoRA picking belongs on the node, like `ic_lora_name`).
 
@@ -151,7 +156,8 @@ This keeps Stage 2 additive JS (a panel + serialize) instead of surgery on the s
 Additive + optional throughout. Revert = drop the branch. `main` untouched until merge.
 
 ## Resolved (was "open questions" in v1)
-- Ports, not a single pre-built input: individual `msr_subject_1..4` + `msr_background` (matches
-  the sample workflow's LoadImage-per-subject shape; keeps Stage-2 JS mapping 1:1).
+- Reference input: the Director's MSR PANEL is the single source (`timeline_data.msr`). The v1
+  answer was individual IMAGE ports; those were built, then REMOVED by user decision once the
+  panel landed — one path, easier to maintain, no port/panel precedence rules.
 - Strength: separate `msr_lora_strength` + `msr_attention_strength` (MSR now has its own LoRA slot,
   so reusing `ic_lora_strength` would couple it to the depth LoRA — wrong).
