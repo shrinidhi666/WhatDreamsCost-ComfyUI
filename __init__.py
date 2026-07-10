@@ -9,6 +9,13 @@ from .ltx_director_guide import LTXDirectorGuide, LTXDirectorCropGuides
 from comfy_api.latest import ComfyExtension, io
 from typing_extensions import override
 
+# AI Prompt (local Ollama prompt generator for the Director) -- optional feature: the
+# import registers POST /ltx_director/ai_prompt; a failure must never break the pack.
+try:
+    from .ai_prompt import routes as _ai_prompt_routes  # noqa: F401
+except Exception as _ai_prompt_err:
+    print(f"[WhatDreamsCost] AI Prompt endpoint not registered: {_ai_prompt_err}")
+
 class PromptRelay(ComfyExtension):
     @override
     async def get_node_list(self) -> list[type[io.ComfyNode]]:
