@@ -40,6 +40,9 @@ Also you will need to update ComfyUI-LTXVideo and ComfyUI-KJNodes to the latest 
 
 # 🔄 Recent Updates
 
+**Fork — MSR (Multi-Subject Reference) support**
+* The LTX Director gets full **Licon-MSR** integration: an MSR panel on the Director (up to 4 subject identity references + a background) plus `msr_*` controls on the LTX Director Guide node, composable with every other Director feature (prompt relay, keyframes, audio, IC-LoRA motion). See the **MSR — Multi-Subject Reference** section under LTX Director 2.0 below for the LoRA download link and usage.
+
 **v2.0.0**
 * **Massive Update to LTX Director. I will add the full list of changes later.**
 
@@ -183,6 +186,41 @@ A Complete Timeline Editor For LTX 2.3. This is the sucessor of my previous node
   - **UI Overhaul:** Huge update to the UI, dozens of big changes such as a new side bar, redesigned prompt boxes, a bunch of new settings and redesigned menus, and more.
 
   - **Quality of Life Improvements:** Snapping, in/out points, multi-select, mark selection, workspace folder, more HUD options, resizable prompt boxes, new hotkeys, labels, filename preview options, "split at playhead" functionality, end frames (convert any keyframe into a end/last frame), toggleable tracks, NAG Support, tons of bug fixes and more!
+
+### 🧬 MSR — Multi-Subject Reference (this fork)
+
+Lock the identity of up to **4 subjects + 1 background/scene** across the whole clip, using the official **Licon-MSR IC-LoRA** for LTX 2.3 — fully integrated into the Director, no extra nodes needed.
+
+**The LoRA (required):**
+- Download from Hugging Face: [LiconStudio/LTX-2.3-Multiple-Subject-Reference](https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference) — file `LTX-2.3-Licon-MSR-V1.safetensors`
+- Put it in `ComfyUI/models/loras/`
+- Credits: the LoRA and the official sample workflow are by [LiconStudio](https://github.com/liconstudio/ComfyUI-Licon-MSR)
+
+**How to use:**
+1. Click the **MSR** button in the Director's toolbar to open the MSR panel.
+2. Drop **1–4 subject** references and **exactly one background** reference onto the panel slots. A subject reference may itself be a multi-view sheet (the same character from several angles in ONE image) — that's the strongest identity signal.
+3. Pick the reference **frame count** on the panel (`17 / 25 / 33 / 41`, default `17`).
+4. On the **LTX Director Guide** node, select the LoRA in `msr_lora_name` (leave strength at `1.0` to start).
+5. Open your **global prompt** with the reference enumeration — one tight clause per reference, subjects first, scene last — then narrate the clip pointing at every referenced element by its enumerated look (never by a name):
+
+```
+Reference image 1: a tall woman with silver hair, a red leather jacket, black boots.
+Reference image 2 (scene): a rain-soaked neon alley at night.
+The woman with silver hair in the red leather jacket walks toward the camera ...
+```
+
+**Guide node controls:**
+- `msr_lora_name` — the Licon-MSR LoRA. A **separate slot** from `ic_lora_name`, so a depth/pose control LoRA (motion track) and MSR can run together in one generation.
+- `msr_lora_strength` — LoRA strength (default `1.0`).
+- `msr_attention_strength` — guide-attention strength for the MSR reference tokens, `0–1` (default `1.0`).
+- `msr_resize_method` — how each reference is fitted to the video's aspect: `crop` (default — center-crop, no distortion), `stretch to fit`, `pad`, `pad green`.
+
+**Good to know:**
+- References can be **any aspect ratio**. With the default `crop` they are center-cropped to the video's aspect — keep each reference's identity carrier (face / subject) centered so the crop never trims it.
+- The composed reference guide is injected at frame 0 with strength 1.0 — the official sample workflow's placement.
+- MSR is fully **additive and composable**: it works alongside prompt relay, image keyframes (first/mid/last frames), custom + inpainted audio, and IC-LoRA motion videos. With no MSR references on the panel the node behaves exactly as before — the LoRA is only applied when the panel has a background + at least one subject.
+- MSR is disabled in Retake Mode.
+- From the official model card: identity typically locks within **2–3 seeds**, and high-motion scenes render smoother at **50 fps**.
 
 Download workflows here: https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI/tree/main/example_workflows
 
