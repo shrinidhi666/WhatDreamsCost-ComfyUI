@@ -674,7 +674,8 @@ function parseInitial(jsonStr) {
     retakeVideo: null,
     normalStartFrame: 0,
     normalDurationFrames: 120,
-    msr: null
+    msr: null,
+    aiPrompt: null
   };
   try {
     if (jsonStr) {
@@ -705,6 +706,12 @@ function parseInitial(jsonStr) {
             : ["", "", "", ""],
           background: typeof p.msr.background === "string" ? p.msr.background : "",
           frameCount: [17, 25, 33, 41].includes(fc) ? fc : 17,
+        };
+      }
+      if (p.aiPrompt && typeof p.aiPrompt === "object") {
+        parsed.aiPrompt = {
+          hint: typeof p.aiPrompt.hint === "string" ? p.aiPrompt.hint : "",
+          segments: Math.max(1, parseInt(p.aiPrompt.segments, 10) || 1),
         };
       }
       if (Array.isArray(p.segments)) {
@@ -2261,6 +2268,16 @@ class TimelineEditor {
     });
     this.msrBtn = msrBtn;
 
+    const aiBtn = document.createElement("button");
+    aiBtn.className = "pr-btn";
+    aiBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z"></path></svg> AI Prompt`;
+    aiBtn.title = "Toggle the AI Prompt panel — write the global + segment prompts from the timeline images/videos and MSR references with a local Ollama vision model";
+    aiBtn.addEventListener("click", () => {
+      this.aiPanelVisible = !this.aiPanelVisible;
+      this._updateAiPanelVisibility();
+    });
+    this.aiBtn = aiBtn;
+
     const uploadVideoBtn = document.createElement("button");
     uploadVideoBtn.className = "pr-btn";
     uploadVideoBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg> Add Video`;
@@ -2311,6 +2328,7 @@ class TimelineEditor {
     actionGroup.appendChild(uploadVideoBtn);
     actionGroup.appendChild(uploadMotionBtn);
     actionGroup.appendChild(msrBtn);
+    actionGroup.appendChild(aiBtn);
     actionGroup.appendChild(deleteBtn);
     actionGroup.appendChild(clearAllBtn);
 
@@ -3772,6 +3790,7 @@ class TimelineEditor {
 
     this.wrapper.appendChild(toolbar);
     this.wrapper.appendChild(this._buildMsrPanel());
+    this.wrapper.appendChild(this._buildAiPromptPanel());
     this.wrapper.appendChild(this.layoutContainer);
 
 
@@ -3856,6 +3875,12 @@ class TimelineEditor {
       if (this._msrHasContent()) this.msrPanelVisible = true;
       this._refreshMsrPanel();
       this._updateMsrPanelVisibility();
+    }
+
+    // 6. Sync the AI Prompt panel (hint + beats + settings) the same way.
+    if (this.aiPanel) {
+      this._refreshAiPromptPanel();
+      this._updateAiPanelVisibility();
     }
   }
 
@@ -4124,6 +4149,216 @@ class TimelineEditor {
     }
     if (this._msrFrameCountSelect) {
       this._msrFrameCountSelect.value = String([17, 25, 33, 41].includes(parseInt(m.frameCount, 10)) ? parseInt(m.frameCount, 10) : 17);
+    }
+  }
+
+  // --- AI Prompt panel ---
+  // One click sends the node's own timeline_data (plus fps/duration and the hint below)
+  // to POST /ltx_director/ai_prompt; a local Ollama vision model writes the GLOBAL prompt
+  // + one SEGMENT prompt per beat, and the results land back in the normal prompt boxes.
+  // The hint persists in timeline_data.aiPrompt; the Ollama model/URL persist on
+  // node.properties (and localStorage as a cross-node default).
+
+  _ensureAiPrompt() {
+    if (!this.timeline.aiPrompt) {
+      this.timeline.aiPrompt = { hint: "", segments: 1 };
+    }
+    return this.timeline.aiPrompt;
+  }
+
+  _aiPromptHasContent() {
+    const a = this.timeline ? this.timeline.aiPrompt : null;
+    return !!(a && (((a.hint || "").trim()) || (parseInt(a.segments, 10) || 1) !== 1));
+  }
+
+  _aiSettings() {
+    if (!this.node.properties) this.node.properties = {};
+    const p = this.node.properties;
+    if (!p.aiPromptOllama || typeof p.aiPromptOllama !== "object") {
+      let storedModel = "";
+      try { storedModel = localStorage.getItem("wdc_ai_prompt_model") || ""; } catch (e) { }
+      p.aiPromptOllama = { url: "http://localhost:11434", model: storedModel };
+    }
+    return p.aiPromptOllama;
+  }
+
+  _updateAiPanelVisibility() {
+    if (this.aiPanel) {
+      this.aiPanel.style.display = this.aiPanelVisible ? "flex" : "none";
+    }
+  }
+
+  _buildAiPromptPanel() {
+    const panel = document.createElement("div");
+    panel.className = "pr-ai-panel";
+    panel.style.cssText = "display:none;gap:6px;align-items:center;padding:6px 8px;background:#1b1b1b;border-bottom:1px solid #333;flex-wrap:wrap;";
+    this.aiPanel = panel;
+
+    const label = document.createElement("div");
+    label.textContent = "AI Prompt";
+    label.title = "Generate the global + segment prompts from the timeline (keyframes, video frames, MSR references) with a local Ollama vision model. The hint steers the writing; segment prompts land on their timeline segments.";
+    label.style.cssText = "font-size:11px;color:#aaa;margin-right:4px;";
+    panel.appendChild(label);
+
+    const hintInput = document.createElement("textarea");
+    hintInput.placeholder = "Optional direction, e.g. \"quiet dusk mood, she notices the camera at the end\"";
+    hintInput.title = "User direction for the generated prompts (applied within the locked LTX rules). Saved with the timeline.";
+    hintInput.rows = 1;
+    hintInput.spellcheck = false;
+    hintInput.style.cssText = "flex:1 1 260px;min-width:200px;resize:vertical;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:3px 6px;";
+    hintInput.addEventListener("change", () => {
+      this._ensureAiPrompt().hint = hintInput.value;
+      this.commitChanges();
+    });
+    this._aiHintInput = hintInput;
+    panel.appendChild(hintInput);
+
+    const segLabel = document.createElement("div");
+    segLabel.textContent = "beats";
+    segLabel.style.cssText = "font-size:10px;color:#888;margin-left:4px;";
+    panel.appendChild(segLabel);
+
+    const segInput = document.createElement("input");
+    segInput.type = "number";
+    segInput.min = "1";
+    segInput.max = "24";
+    segInput.value = "1";
+    segInput.title = "How many beats to invent when the timeline is EMPTY (MSR-only runs). Ignored when the timeline has segments.";
+    segInput.style.cssText = "width:44px;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:2px 4px;";
+    segInput.addEventListener("change", () => {
+      this._ensureAiPrompt().segments = Math.max(1, parseInt(segInput.value, 10) || 1);
+      this.commitChanges();
+    });
+    this._aiSegmentsInput = segInput;
+    panel.appendChild(segInput);
+
+    const modelInput = document.createElement("input");
+    modelInput.type = "text";
+    modelInput.placeholder = "ollama model, e.g. gemma4:26b-a4b-it-qat";
+    modelInput.title = "The Ollama vision model tag (needs image support). Saved on the node and remembered as the default for new nodes.";
+    modelInput.style.cssText = "flex:0 1 200px;min-width:150px;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:3px 6px;";
+    modelInput.addEventListener("change", () => {
+      this._aiSettings().model = modelInput.value.trim();
+      try { localStorage.setItem("wdc_ai_prompt_model", modelInput.value.trim()); } catch (e) { }
+    });
+    this._aiModelInput = modelInput;
+    panel.appendChild(modelInput);
+
+    const urlInput = document.createElement("input");
+    urlInput.type = "text";
+    urlInput.placeholder = "http://localhost:11434";
+    urlInput.title = "The Ollama server URL. Saved on the node.";
+    urlInput.style.cssText = "flex:0 1 150px;min-width:120px;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:3px 6px;";
+    urlInput.addEventListener("change", () => {
+      this._aiSettings().url = urlInput.value.trim();
+    });
+    this._aiUrlInput = urlInput;
+    panel.appendChild(urlInput);
+
+    const genBtn = document.createElement("button");
+    genBtn.className = "pr-btn";
+    genBtn.textContent = "Generate";
+    genBtn.title = "Write the global + segment prompts from the timeline with the local Ollama model. ComfyUI models are unloaded first; the Ollama model frees the GPU ~10s after it answers.";
+    genBtn.addEventListener("click", () => this._aiGenerate());
+    this._aiGenerateBtn = genBtn;
+    panel.appendChild(genBtn);
+
+    const status = document.createElement("div");
+    status.style.cssText = "font-size:10px;color:#888;flex-basis:100%;display:none;";
+    this._aiStatus = status;
+    panel.appendChild(status);
+
+    this.aiPanelVisible = false;
+    this._refreshAiPromptPanel();
+    this._updateAiPanelVisibility();
+    return panel;
+  }
+
+  _refreshAiPromptPanel() {
+    if (!this.aiPanel) return;
+    const a = this.timeline.aiPrompt || { hint: "", segments: 1 };
+    if (this._aiHintInput) this._aiHintInput.value = a.hint || "";
+    if (this._aiSegmentsInput) this._aiSegmentsInput.value = String(Math.max(1, parseInt(a.segments, 10) || 1));
+    const s = this._aiSettings();
+    if (this._aiModelInput) this._aiModelInput.value = s.model || "";
+    if (this._aiUrlInput) this._aiUrlInput.value = s.url || "http://localhost:11434";
+  }
+
+  _aiSetStatus(text, isError) {
+    if (!this._aiStatus) return;
+    this._aiStatus.textContent = text || "";
+    this._aiStatus.style.display = text ? "block" : "none";
+    this._aiStatus.style.color = isError ? "#f88" : "#8c8";
+  }
+
+  async _aiGenerate() {
+    if (this._aiBusy) return;
+    if (this.retakeMode) {
+      this._aiSetStatus("AI Prompt works on the normal timeline. Leave Retake Mode first.", true);
+      return;
+    }
+    const settings = this._aiSettings();
+    if (this._aiModelInput) settings.model = this._aiModelInput.value.trim();
+    if (this._aiUrlInput) settings.url = this._aiUrlInput.value.trim() || "http://localhost:11434";
+    if (this._aiHintInput) this._ensureAiPrompt().hint = this._aiHintInput.value;
+    if (this._aiSegmentsInput) this._ensureAiPrompt().segments = Math.max(1, parseInt(this._aiSegmentsInput.value, 10) || 1);
+
+    // Serialize the timeline exactly as the Guide will read it, then send that string.
+    this.commitChanges();
+    const timelineStr = (this.timelineDataWidget && typeof this.timelineDataWidget.value === "string")
+      ? this.timelineDataWidget.value : "{}";
+
+    const body = {
+      timeline_data: timelineStr,
+      fps: this.getFrameRate(),
+      duration_frames: this.getDurationFrames(),
+      hint: this._aiHintInput ? this._aiHintInput.value : "",
+      segments_wanted: Math.max(1, parseInt(this._aiSegmentsInput ? this._aiSegmentsInput.value : "1", 10) || 1),
+      settings: { model: settings.model, url: settings.url },
+    };
+
+    this._aiBusy = true;
+    if (this._aiGenerateBtn) this._aiGenerateBtn.disabled = true;
+    this._aiSetStatus("Generating... (the model may need to load first — this can take a minute or two)", false);
+    try {
+      const resp = await api.fetchApi("/ltx_director/ai_prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      let data = null;
+      try { data = await resp.json(); } catch (e) { }
+      if (!resp.ok || !data || data.error) {
+        this._aiSetStatus((data && data.error) || `AI Prompt failed (HTTP ${resp.status}).`, true);
+        return;
+      }
+
+      if (this.globalPromptInput) this.globalPromptInput.value = data.global || "";
+      this.syncGlobalPrompt(data.global || "");
+
+      const randId = () => Date.now().toString() + Math.random().toString(36).substr(2, 5);
+      for (const s of (data.segments || [])) {
+        if (s.id) {
+          const seg = this.timeline.segments.find(x => x.id === s.id);
+          if (seg) seg.prompt = s.prompt || "";
+        } else {
+          this.timeline.segments.push({
+            id: randId(), start: s.start, length: s.length,
+            prompt: s.prompt || "", type: "text",
+          });
+        }
+      }
+      this.timeline.segments.sort((a, b) => a.start - b.start);
+      this.updateUIFromSelection();
+      this.commitChanges();
+      this.render();
+      const note = data.meta && data.meta.vram_note ? ` (${data.meta.vram_note})` : "";
+      this._aiSetStatus(`Done — global + ${(data.segments || []).length} segment prompt(s) written. Review, tweak, then Queue.${note}`, false);
+    } catch (e) {
+      this._aiSetStatus(`AI Prompt request failed: ${e.message || e}`, true);
+    } finally {
+      this._aiBusy = false;
+      if (this._aiGenerateBtn) this._aiGenerateBtn.disabled = false;
     }
   }
 
@@ -5883,6 +6118,11 @@ class TimelineEditor {
     if (this.uploadMotionBtn) this.uploadMotionBtn.style.display = isRetake ? "none" : "";
     if (this.deleteBtn) this.deleteBtn.style.display = isRetake ? "none" : "";
     if (this.clearAllBtn) this.clearAllBtn.style.display = isRetake ? "none" : "";
+    if (this.aiBtn) this.aiBtn.style.display = isRetake ? "none" : "";
+    if (isRetake && this.aiPanelVisible) {
+      this.aiPanelVisible = false;
+      this._updateAiPanelVisibility();
+    }
     // deleteRetakeBtn is visible whenever Retake Mode is active
     if (this.deleteRetakeBtn) {
       this.deleteRetakeBtn.style.display = isRetake ? "" : "none";
@@ -9091,6 +9331,10 @@ class TimelineEditor {
         subjects: (this.timeline.msr.subjects || []).slice(0, 4).map(s => s || ""),
         background: this.timeline.msr.background || "",
         frameCount: parseInt(this.timeline.msr.frameCount, 10) || 17,
+      } : null,
+      aiPrompt: this._aiPromptHasContent() ? {
+        hint: this.timeline.aiPrompt.hint || "",
+        segments: Math.max(1, parseInt(this.timeline.aiPrompt.segments, 10) || 1),
       } : null,
       segments: sortedSegments.map(s => {
         const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
