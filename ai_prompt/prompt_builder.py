@@ -21,6 +21,8 @@ The contract (unchanged from the CLI):
 import re
 from pathlib import Path
 
+from .axes import AUDIO_DIRECTIVES, CAMERA_CORES, MOTION_CORES
+
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 # The maximum MSR subject references -- 1-4 subjects + 1 scene is the Licon-MSR LoRA's
@@ -100,7 +102,8 @@ LOCKED_RULES = """CRITICAL OUTPUT RULES (follow ALL):
 
 # ---- The vision prompt ---------------------------------------------------------------
 
-def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None):
+def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
+                        motion="free", camera="free", audio="full"):
     """The Director vision prompt, built from the ACTUAL timeline.
 
     `beats` -- list of dicts, one per timeline segment IN TIME ORDER:
@@ -112,7 +115,16 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None):
     them), then the MSR background reference when msr_bg is True.
     `audio_notes` -- optional list of plain-text lines describing imported audio clips
     (context only; the model cannot hear them).
+    `motion` / `camera` / `audio` -- the three orthogonal axes (see axes.py). The inert
+    defaults ("free"/"free"/"full") inject nothing; other choices inject their directive
+    block in the CLI's exact order: motion core, MSR block, camera, audio, locked rules.
     """
+    if motion not in MOTION_CORES:
+        raise ValueError(f"Unknown motion '{motion}'. Choices: {list(MOTION_CORES)}")
+    if camera not in CAMERA_CORES:
+        raise ValueError(f"Unknown camera '{camera}'. Choices: {list(CAMERA_CORES)}")
+    if audio not in AUDIO_DIRECTIVES:
+        raise ValueError(f"Unknown audio '{audio}'. Choices: {list(AUDIO_DIRECTIVES)}")
     n_segments = len(beats)
     if n_segments < 1:
         raise ValueError("build_vision_prompt needs at least one beat.")
@@ -212,6 +224,14 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None):
             "Fill each from its actual reference image, then narrate the clip under rule 7.\n\n"
         )
 
+    # Axis blocks, in the CLI's exact order: motion core first, then MSR, then camera and
+    # audio (placed after the core so they override any camera/audio the core implies).
+    # The inert defaults are all empty strings -- a free/free/full run injects nothing.
+    core = MOTION_CORES[motion]
+    core_block = f"{core}\n\n" if core else ""
+    camera_block = CAMERA_CORES[camera]
+    audio_block = AUDIO_DIRECTIVES[audio]
+
     seg_labels = "\n".join(f"SEGMENT {i}: <present-tense paragraph for beat {i}'s window ONLY>"
                            for i in range(1, n_segments + 1))
     task = (
@@ -223,7 +243,7 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None):
         + seg_labels + "\n"
         "No preamble, no JSON, no headings beyond those labels, no bullets. Strictly ASCII."
     )
-    return f"{intro}\n\n{msr_block}{LOCKED_RULES}{task}"
+    return f"{intro}\n\n{core_block}{msr_block}{camera_block}{audio_block}{LOCKED_RULES}{task}"
 
 
 def with_hint(prompt, hint):

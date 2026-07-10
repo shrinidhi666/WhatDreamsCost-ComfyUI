@@ -712,6 +712,9 @@ function parseInitial(jsonStr) {
         parsed.aiPrompt = {
           hint: typeof p.aiPrompt.hint === "string" ? p.aiPrompt.hint : "",
           segments: Math.max(1, parseInt(p.aiPrompt.segments, 10) || 1),
+          motion: typeof p.aiPrompt.motion === "string" ? p.aiPrompt.motion : "free",
+          camera: typeof p.aiPrompt.camera === "string" ? p.aiPrompt.camera : "free",
+          audio: typeof p.aiPrompt.audio === "string" ? p.aiPrompt.audio : "full",
         };
       }
       if (Array.isArray(p.segments)) {
@@ -4161,14 +4164,22 @@ class TimelineEditor {
 
   _ensureAiPrompt() {
     if (!this.timeline.aiPrompt) {
-      this.timeline.aiPrompt = { hint: "", segments: 1 };
+      this.timeline.aiPrompt = { hint: "", segments: 1, motion: "free", camera: "free", audio: "full" };
     }
-    return this.timeline.aiPrompt;
+    const a = this.timeline.aiPrompt;
+    if (!a.motion) a.motion = "free";
+    if (!a.camera) a.camera = "free";
+    if (!a.audio) a.audio = "full";
+    return a;
   }
 
   _aiPromptHasContent() {
     const a = this.timeline ? this.timeline.aiPrompt : null;
-    return !!(a && (((a.hint || "").trim()) || (parseInt(a.segments, 10) || 1) !== 1));
+    return !!(a && (((a.hint || "").trim())
+      || (parseInt(a.segments, 10) || 1) !== 1
+      || (a.motion && a.motion !== "free")
+      || (a.camera && a.camera !== "free")
+      || (a.audio && a.audio !== "full")));
   }
 
   _aiSettings() {
@@ -4232,6 +4243,36 @@ class TimelineEditor {
     this._aiSegmentsInput = segInput;
     panel.appendChild(segInput);
 
+    // The three orthogonal axes (motion family / camera move / audio fence). Options come
+    // from GET /ltx_director/ai_prompt/choices so the server's axes.py stays the single
+    // source; until it answers, each select carries only its inert default.
+    const mkAxis = (key, defaultVal, title) => {
+      const lab = document.createElement("div");
+      lab.textContent = key;
+      lab.style.cssText = "font-size:10px;color:#888;margin-left:4px;";
+      panel.appendChild(lab);
+      const sel = document.createElement("select");
+      sel.title = title;
+      sel.style.cssText = "background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;";
+      const opt = document.createElement("option");
+      opt.value = defaultVal;
+      opt.textContent = defaultVal;
+      sel.appendChild(opt);
+      sel.addEventListener("change", () => {
+        this._ensureAiPrompt()[key] = sel.value;
+        this.commitChanges();
+      });
+      panel.appendChild(sel);
+      return sel;
+    };
+    this._aiMotionSelect = mkAxis("motion", "free",
+      "Motion family for the clip. free = the model reads the beats and decides (a multi-beat story is never forced into one family).");
+    this._aiCameraSelect = mkAxis("camera", "free",
+      "Camera move, orthogonal to motion. free = the model chooses the camera from the frame.");
+    this._aiAudioSelect = mkAxis("audio", "full",
+      "Audio fence: which sound layers exist. full = the model authors ambient, SFX, music and dialogue freely.");
+    this._aiLoadChoices();
+
     const modelInput = document.createElement("input");
     modelInput.type = "text";
     modelInput.placeholder = "ollama model, e.g. gemma4:26b-a4b-it-qat";
@@ -4274,11 +4315,45 @@ class TimelineEditor {
     return panel;
   }
 
+  async _aiLoadChoices() {
+    try {
+      const resp = await api.fetchApi("/ltx_director/ai_prompt/choices");
+      if (resp.status !== 200) return;
+      const data = await resp.json();
+      const fill = (sel, values) => {
+        if (!sel || !Array.isArray(values) || !values.length) return;
+        const current = sel.value;
+        sel.innerHTML = "";
+        for (const v of values) {
+          const opt = document.createElement("option");
+          opt.value = v;
+          opt.textContent = v;
+          sel.appendChild(opt);
+        }
+        sel.value = values.includes(current) ? current : values[0];
+      };
+      fill(this._aiMotionSelect, data.motion);
+      fill(this._aiCameraSelect, data.camera);
+      fill(this._aiAudioSelect, data.audio);
+      this._refreshAiPromptPanel();
+    } catch (e) {
+      console.warn("[LTXDirector] AI Prompt choices unavailable:", e);
+    }
+  }
+
   _refreshAiPromptPanel() {
     if (!this.aiPanel) return;
-    const a = this.timeline.aiPrompt || { hint: "", segments: 1 };
+    const a = this.timeline.aiPrompt || { hint: "", segments: 1, motion: "free", camera: "free", audio: "full" };
     if (this._aiHintInput) this._aiHintInput.value = a.hint || "";
     if (this._aiSegmentsInput) this._aiSegmentsInput.value = String(Math.max(1, parseInt(a.segments, 10) || 1));
+    const setSel = (sel, val, fallback) => {
+      if (!sel) return;
+      const want = val || fallback;
+      if ([...sel.options].some(o => o.value === want)) sel.value = want;
+    };
+    setSel(this._aiMotionSelect, a.motion, "free");
+    setSel(this._aiCameraSelect, a.camera, "free");
+    setSel(this._aiAudioSelect, a.audio, "full");
     const s = this._aiSettings();
     if (this._aiModelInput) this._aiModelInput.value = s.model || "";
     if (this._aiUrlInput) this._aiUrlInput.value = s.url || "http://localhost:11434";
@@ -4300,8 +4375,12 @@ class TimelineEditor {
     const settings = this._aiSettings();
     if (this._aiModelInput) settings.model = this._aiModelInput.value.trim();
     if (this._aiUrlInput) settings.url = this._aiUrlInput.value.trim() || "http://localhost:11434";
-    if (this._aiHintInput) this._ensureAiPrompt().hint = this._aiHintInput.value;
-    if (this._aiSegmentsInput) this._ensureAiPrompt().segments = Math.max(1, parseInt(this._aiSegmentsInput.value, 10) || 1);
+    const aip = this._ensureAiPrompt();
+    if (this._aiHintInput) aip.hint = this._aiHintInput.value;
+    if (this._aiSegmentsInput) aip.segments = Math.max(1, parseInt(this._aiSegmentsInput.value, 10) || 1);
+    if (this._aiMotionSelect) aip.motion = this._aiMotionSelect.value || "free";
+    if (this._aiCameraSelect) aip.camera = this._aiCameraSelect.value || "free";
+    if (this._aiAudioSelect) aip.audio = this._aiAudioSelect.value || "full";
 
     // Serialize the timeline exactly as the Guide will read it, then send that string.
     this.commitChanges();
@@ -4314,6 +4393,9 @@ class TimelineEditor {
       duration_frames: this.getDurationFrames(),
       hint: this._aiHintInput ? this._aiHintInput.value : "",
       segments_wanted: Math.max(1, parseInt(this._aiSegmentsInput ? this._aiSegmentsInput.value : "1", 10) || 1),
+      motion: aip.motion || "free",
+      camera: aip.camera || "free",
+      audio: aip.audio || "full",
       settings: { model: settings.model, url: settings.url },
     };
 
@@ -9335,6 +9417,9 @@ class TimelineEditor {
       aiPrompt: this._aiPromptHasContent() ? {
         hint: this.timeline.aiPrompt.hint || "",
         segments: Math.max(1, parseInt(this.timeline.aiPrompt.segments, 10) || 1),
+        motion: this.timeline.aiPrompt.motion || "free",
+        camera: this.timeline.aiPrompt.camera || "free",
+        audio: this.timeline.aiPrompt.audio || "full",
       } : null,
       segments: sortedSegments.map(s => {
         const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;

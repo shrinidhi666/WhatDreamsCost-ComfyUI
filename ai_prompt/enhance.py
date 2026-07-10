@@ -157,8 +157,12 @@ def build_request(payload, input_dir):
         length_s = (int(a.get("length", 0)) or 0) / fps
         audio_notes.append(f"clip '{name}' plays from {start_s:.1f}s for {length_s:.1f}s")
 
-    prompt = prompt_builder.build_vision_prompt(beats, msr_count=msr_count, msr_bg=msr_bg,
-                                                audio_notes=audio_notes)
+    prompt = prompt_builder.build_vision_prompt(
+        beats, msr_count=msr_count, msr_bg=msr_bg, audio_notes=audio_notes,
+        motion=(payload.get("motion") or "free"),
+        camera=(payload.get("camera") or "free"),
+        audio=(payload.get("audio") or "full"),
+    )
     prompt = prompt_builder.with_hint(prompt, payload.get("hint") or "")
     return prompt, prompt_builder.load_system_skill(), images, segments_out
 

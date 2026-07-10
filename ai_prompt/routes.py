@@ -31,6 +31,7 @@ import comfy.model_management
 import folder_paths
 
 from . import enhance
+from .axes import AUDIO_CHOICES, CAMERA_CHOICES, MOTION_CHOICES
 from .ollama_client import OllamaError
 
 # How long to wait for ComfyUI to hand the GPU back before calling Ollama anyway
@@ -82,6 +83,17 @@ def _run_blocking(payload):
     if note:
         result.setdefault("meta", {})["vram_note"] = note
     return result
+
+
+@PromptServer.instance.routes.get("/ltx_director/ai_prompt/choices")
+async def ai_prompt_choices(request):
+    """The three axis choice lists -- the panel's dropdowns populate from here, so the
+    vendored axes.py stays the single source of truth (no list copied into the JS)."""
+    return web.json_response({
+        "motion": MOTION_CHOICES,
+        "camera": CAMERA_CHOICES,
+        "audio": AUDIO_CHOICES,
+    })
 
 
 @PromptServer.instance.routes.post("/ltx_director/ai_prompt")
