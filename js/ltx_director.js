@@ -4212,8 +4212,8 @@ class TimelineEditor {
     panel.appendChild(label);
 
     const hintInput = document.createElement("textarea");
-    hintInput.placeholder = "Optional direction, e.g. \"quiet dusk mood, she notices the camera at the end\"";
-    hintInput.title = "User direction for the generated prompts (applied within the locked LTX rules). Saved with the timeline.";
+    hintInput.placeholder = "Optional brief, e.g. \"quiet dusk mood, she notices the camera at the end\"";
+    hintInput.title = "The clip's creative brief — the generated prompts must visibly realize it (it outranks the model's own reading of the frames; output-format rules still apply). Saved with the timeline.";
     hintInput.rows = 1;
     hintInput.spellcheck = false;
     hintInput.style.cssText = "flex:1 1 260px;min-width:200px;resize:vertical;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:3px 6px;";

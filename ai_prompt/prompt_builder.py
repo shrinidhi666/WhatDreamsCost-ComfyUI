@@ -94,7 +94,9 @@ LOCKED_RULES = """CRITICAL OUTPUT RULES (follow ALL):
   (e.g. "a colossal grey-skinned heavy-jawed creature", "a giant serpent", "a radiant
   being") -- never a culture-specific or mythological label.
 - ACTION-LED. ONE main motion idea per segment. Do not invent new props, characters, or
-  architecture that are not visible in the image(s).
+  architecture that are not visible in the image(s) -- with ONE exception: elements THE
+  USER'S BRIEF explicitly asks for ARE allowed; introduce them in plain visual terms
+  (look + frame-position), exactly like everything else.
 - NO TIMING WORDS. Never write seconds, frame numbers, durations, counts of time, or
   playback-speed references into any prompt. The segment windows below size HOW MUCH
   happens; the words describe only WHAT happens."""
@@ -103,7 +105,7 @@ LOCKED_RULES = """CRITICAL OUTPUT RULES (follow ALL):
 # ---- The vision prompt ---------------------------------------------------------------
 
 def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
-                        motion="free", camera="free", audio="full"):
+                        motion="free", camera="free", audio="full", hint=""):
     """The Director vision prompt, built from the ACTUAL timeline.
 
     `beats` -- list of dicts, one per timeline segment IN TIME ORDER:
@@ -118,6 +120,12 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
     `motion` / `camera` / `audio` -- the three orthogonal axes (see axes.py). The inert
     defaults ("free"/"free"/"full") inject nothing; other choices inject their directive
     block in the CLI's exact order: motion core, MSR block, camera, audio, locked rules.
+    `hint` -- THE USER'S BRIEF. Departure from the CLI's soft trailing "steer toward
+    this" nudge (which the 26b diluted in practice): the brief is stated EARLY as the
+    clip's authoritative creative direction AND re-stated at the end (models attend to
+    both ends), it explicitly outranks the model's own reading of the frames and the
+    axis directives, and the ACTION-LED rule carves out elements the brief asks for.
+    Only the output-FORMAT rules stay absolute. Empty hint injects nothing.
     """
     if motion not in MOTION_CORES:
         raise ValueError(f"Unknown motion '{motion}'. Choices: {list(MOTION_CORES)}")
@@ -160,7 +168,7 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
             "",
             "There are NO beat frames for this clip -- ONLY the identity references above exist.",
             f"INVENT the {n_segments} story beat(s) yourself: what these referenced subjects do in",
-            "the referenced scene, one beat per timeline segment, following the user direction if",
+            "the referenced scene, one beat per timeline segment, following THE USER'S BRIEF if",
             "one is given.",
         ]
 
@@ -196,6 +204,15 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
         "naturally out of the previous beat and into the next (one continuous shot, never a",
         "scene cut).",
     ]
+    hint = (hint or "").strip()
+    if hint:
+        lines += [
+            "",
+            "THE USER'S BRIEF (the clip's creative direction -- the finished prompts must",
+            "VISIBLY realize this; it OUTRANKS your own reading of the frames and every axis",
+            "directive below; only the CRITICAL OUTPUT RULES stay absolute):",
+            f"  {hint}",
+        ]
     intro = "\n".join(lines)
 
     msr_block = ""
@@ -243,18 +260,12 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
         + seg_labels + "\n"
         "No preamble, no JSON, no headings beyond those labels, no bullets. Strictly ASCII."
     )
-    return f"{intro}\n\n{core_block}{msr_block}{camera_block}{audio_block}{LOCKED_RULES}{task}"
-
-
-def with_hint(prompt, hint):
-    """Append an explicit user-direction block to the vision prompt. Empty hint returns the
-    prompt unchanged. (Vendored verbatim from insta_ltx._with_hint.)"""
-    if not hint or not hint.strip():
-        return prompt
-    return (prompt
-            + "\n\nUSER DIRECTION (steer the motion toward this -- but keep ALL the "
-            + "locked output rules above):\n  "
-            + hint.strip())
+    brief_reminder = ""
+    if hint:
+        brief_reminder = ("\n\nREMEMBER THE USER'S BRIEF -- every prompt must visibly "
+                          f"realize it:\n  {hint}")
+    return (f"{intro}\n\n{core_block}{msr_block}{camera_block}{audio_block}"
+            f"{LOCKED_RULES}{task}{brief_reminder}")
 
 
 # ---- The labeled-sections parser (the output contract) --------------------------------

@@ -162,8 +162,8 @@ def build_request(payload, input_dir):
         motion=(payload.get("motion") or "free"),
         camera=(payload.get("camera") or "free"),
         audio=(payload.get("audio") or "full"),
+        hint=(payload.get("hint") or ""),
     )
-    prompt = prompt_builder.with_hint(prompt, payload.get("hint") or "")
     return prompt, prompt_builder.load_system_skill(), images, segments_out
 
 
