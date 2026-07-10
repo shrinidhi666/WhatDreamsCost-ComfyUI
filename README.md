@@ -247,7 +247,9 @@ One click writes the **global prompt + one prompt per timeline segment** — gro
 4. Optionally pick **motion / camera / audio** (defaults `free/free/full` let the model decide; other choices inject authoritative LTX-native directives — e.g. `push_in`, `no-music`).
 5. Click **Generate**. The global prompt box and every segment's local prompt fill in, beat by beat. Review, tweak, Queue.
 
-**What it knows:** every keyframe image, every video's first frame, the MSR panel references (enumeration-first prompting per the MSR rules), each segment's real time window (used for pacing only — the written prompts never contain timing words), any rough text you already typed on a segment (honored and written out properly), and your imported audio clips (as context). With an **empty timeline + MSR refs**, set "beats" to N and it invents N segments, creating the text segments for you.
+**What it knows:** every keyframe image, every video's first frame, the MSR panel references (enumeration-first prompting per the MSR rules), each segment's real time window (used for pacing only — the written prompts never contain timing words), any rough text you already typed on a segment (honored and written out properly), and your imported audio clips (as context).
+
+**Beats:** the panel's "beats" number is the **total story beats you want for the clip**. Existing segments count as beats; if you ask for more, the uncovered part of the timeline (before/between/after your keyframes) is split into the remaining beats and created as text segments for you. Empty timeline + MSR refs = all beats invented (MSR-only mode).
 
 **GPU safety (single-GPU friendly):** the endpoint refuses while ComfyUI is generating, unloads ComfyUI's models before calling Ollama, and the Ollama model evicts itself ~10 seconds after answering — by the time you review the prompts and hit Queue, the GPU is clean.
 

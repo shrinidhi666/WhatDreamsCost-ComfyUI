@@ -105,20 +105,53 @@ def build_request(payload, input_dir):
             "length": length,
         })
 
-    # --- Empty timeline: invent N evenly-split beats (the CLI's image-less mode).
-    if not beats:
-        n = int(payload.get("segments_wanted") or 1)
-        if n < 1:
-            raise ValueError("segments_wanted must be >= 1.")
-        if duration_frames < n:
+    # --- Invent beats up to the requested TOTAL: `segments_wanted` is the desired beat
+    # count for the whole clip. Existing segments already count as beats (their rough text
+    # is enhanced in place); when more are wanted, the UNCOVERED duration -- the gaps
+    # before/between/after the existing segments -- is chopped into the remaining windows,
+    # in time order, sized proportionally to each gap. With an empty timeline this is the
+    # CLI's image-less mode (all beats invented).
+    want = int(payload.get("segments_wanted") or 1)
+    if want < 1:
+        raise ValueError("segments_wanted must be >= 1.")
+    extra = want - len(beats)
+    if extra > 0 and duration_frames > 0:
+        spans = sorted((e["start"], e["start"] + e["length"]) for e in segments_out)
+        gaps, cursor = [], 0
+        for a, b in spans:
+            if a > cursor:
+                gaps.append((cursor, a))
+            cursor = max(cursor, b)
+        if cursor < duration_frames:
+            gaps.append((cursor, duration_frames))
+        total_gap = sum(b - a for a, b in gaps)
+        if not segments_out and total_gap < extra:
             raise ValueError("The clip duration is shorter than the requested segment count.")
-        base, rem = divmod(duration_frames, n)
-        start = 0
-        for i in range(n):
-            length = base + (1 if i < rem else 0)
-            beats.append({"seconds": length / fps, "has_image": False, "text": ""})
-            segments_out.append({"id": None, "start": start, "length": length})
-            start += length
+        if total_gap > 0:
+            # Largest-remainder proportional allocation of the extra windows over the gaps.
+            quotas = [(extra * (b - a)) // total_gap for a, b in gaps]
+            remainders = sorted(range(len(gaps)),
+                                key=lambda i: (extra * (gaps[i][1] - gaps[i][0])) % total_gap,
+                                reverse=True)
+            for i in remainders[:extra - sum(quotas)]:
+                quotas[i] += 1
+            pairs = list(zip(segments_out, beats))
+            for (a, b), q in zip(gaps, quotas):
+                q = min(q, b - a)   # never mint zero-length windows in a tiny gap
+                if q <= 0:
+                    continue
+                base, rem = divmod(b - a, q)
+                start = a
+                for i in range(q):
+                    length = base + (1 if i < rem else 0)
+                    pairs.append((
+                        {"id": None, "start": start, "length": length},
+                        {"seconds": length / fps, "has_image": False, "text": ""},
+                    ))
+                    start += length
+            pairs.sort(key=lambda p: p[0]["start"])
+            segments_out = [p[0] for p in pairs]
+            beats = [p[1] for p in pairs]
 
     # --- MSR references from the Director's MSR panel (subjects first, background last --
     # the panel order IS the enumeration order). A missing reference file is a HARD error:

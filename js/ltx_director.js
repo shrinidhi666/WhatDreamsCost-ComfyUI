@@ -4234,7 +4234,7 @@ class TimelineEditor {
     segInput.min = "1";
     segInput.max = "24";
     segInput.value = "1";
-    segInput.title = "How many beats to invent when the timeline is EMPTY (MSR-only runs). Ignored when the timeline has segments.";
+    segInput.title = "Desired TOTAL story beats for the clip. Existing segments count as beats; ask for more and the uncovered part of the timeline is split into new text segments (empty timeline = all beats invented, MSR-only mode).";
     segInput.style.cssText = "width:44px;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:2px 4px;";
     segInput.addEventListener("change", () => {
       this._ensureAiPrompt().segments = Math.max(1, parseInt(segInput.value, 10) || 1);
