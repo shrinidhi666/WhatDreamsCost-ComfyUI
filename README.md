@@ -8,6 +8,12 @@ Also if you want to support this project or my channel, I did make a Ko-fi due t
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/J5N221K0D5)
 
+> **🔱 About this fork** ([shrinidhi666/WhatDreamsCost-ComfyUI](https://github.com/shrinidhi666/WhatDreamsCost-ComfyUI), forked from [WhatDreamsCost](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI) — all original nodes and credit belong to the upstream author). This fork adds to the LTX Director:
+> - **MSR (Multi-Subject Reference)** — lock up to 4 subject identities + a background across the whole clip via the official Licon-MSR LoRA ([details](#-msr--multi-subject-reference-this-fork))
+> - **AI Prompt** — a built-in prompt generator: one click writes the global + per-segment prompts from your timeline images/videos and MSR references using a local Ollama vision model ([details](#-ai-prompt--generate-the-prompts-from-the-timeline-this-fork))
+> - **Per-image Guide Strength that actually works** — each keyframe's strength now controls how strongly the model follows *that* image ([details](#-per-image-guide-strength-this-fork))
+> - **Track-gated LoRAs** (the IC/MSR LoRA is only applied when its track has content), a **Clear All** button, and assorted guardrails
+
 ## ▶️ YouTube Tutorial Videos
 
 <table>
@@ -39,6 +45,12 @@ If you don't see the latest version (v1.3.9) yet in the manager then just downlo
 Also you will need to update ComfyUI-LTXVideo and ComfyUI-KJNodes to the latest version as well. You cannot use this node without updating ComfyUI-LTXVideo!
 
 # 🔄 Recent Updates
+
+**Fork — AI Prompt: built-in prompt generator (local Ollama)**
+* One click writes the **global prompt + one prompt per timeline segment** from your actual timeline (keyframes, video first-frames, MSR references) with a local Ollama vision model. Hint/brief box, motion/camera/audio dropdowns, per-beat placement, GPU-safe (ComfyUI models are unloaded first; the Ollama model frees the GPU seconds after answering). See the AI Prompt section below.
+
+**Fork — per-image Guide Strength now steers for real**
+* Each keyframe's Guide Strength is now applied to that image's **attention** (the channel that actually guides LTX 2.3), not just the legacy noise mask. Defaults unchanged; `image_attention_strength` on the Guide becomes a master fader. See the section below.
 
 **Fork — MSR (Multi-Subject Reference) support**
 * The LTX Director gets full **Licon-MSR** integration: an MSR panel on the Director (up to 4 subject identity references + a background) plus `msr_*` controls on the LTX Director Guide node, composable with every other Director feature (prompt relay, keyframes, audio, IC-LoRA motion). See the **MSR — Multi-Subject Reference** section under LTX Director 2.0 below for the LoRA download link and usage.
@@ -221,6 +233,38 @@ The woman with silver hair in the red leather jacket walks toward the camera ...
 - MSR is fully **additive and composable**: it works alongside prompt relay, image keyframes (first/mid/last frames), custom + inpainted audio, and IC-LoRA motion videos. With no MSR references on the panel the node behaves exactly as before — the LoRA is only applied when the panel has a background + at least one subject.
 - MSR is disabled in Retake Mode.
 - From the official model card: identity typically locks within **2–3 seeds**, and high-motion scenes render smoother at **50 fps**.
+
+### ✨ AI Prompt — generate the prompts from the timeline (this fork)
+
+One click writes the **global prompt + one prompt per timeline segment** — grounded in what's actually on your timeline — using a **local Ollama** vision model. Fully self-contained (stdlib HTTP, no extra pip packages, no external tools).
+
+**Requirements:** a running [Ollama](https://ollama.com) server and a vision-capable model (e.g. a large Gemma). Enter the model tag once in the panel — it's remembered.
+
+**How to use:**
+1. Build your timeline as usual (keyframes / videos / MSR references — any mix, or MSR refs alone).
+2. Click **AI Prompt** in the toolbar to open the panel.
+3. Optionally type a **brief** ("quiet dusk mood, she notices the camera at the end") — the generated prompts must visibly realize it, and it may introduce elements not in your frames.
+4. Optionally pick **motion / camera / audio** (defaults `free/free/full` let the model decide; other choices inject authoritative LTX-native directives — e.g. `push_in`, `no-music`).
+5. Click **Generate**. The global prompt box and every segment's local prompt fill in, beat by beat. Review, tweak, Queue.
+
+**What it knows:** every keyframe image, every video's first frame, the MSR panel references (enumeration-first prompting per the MSR rules), each segment's real time window (used for pacing only — the written prompts never contain timing words), any rough text you already typed on a segment (honored and written out properly), and your imported audio clips (as context). With an **empty timeline + MSR refs**, set "beats" to N and it invents N segments, creating the text segments for you.
+
+**GPU safety (single-GPU friendly):** the endpoint refuses while ComfyUI is generating, unloads ComfyUI's models before calling Ollama, and the Ollama model evicts itself ~10 seconds after answering — by the time you review the prompts and hit Queue, the GPU is clean.
+
+### 🎚️ Per-image Guide Strength (this fork)
+
+The per-segment **Guide Strength** you drag on a timeline keyframe now controls how strongly the model **follows that image** — upstream (and every node passing core AddGuide's `strength`) only wires it to a legacy noise mask that LTX 2.3 barely responds to, which is why the slider used to feel dead.
+
+- `1.0` — the video follows that keyframe fully (default; existing workflows behave identically).
+- `0.7` — that keyframe pulls at 70%; other keyframes are unaffected.
+- `0.0` — that keyframe is skipped entirely.
+- `image_attention_strength` on the Guide node acts as a **master fader** multiplied over all keyframes (leave at 1.0 to just use the per-image sliders).
+- Active when an **IC or MSR LoRA** is loaded on the Guide (the attention rail belongs to that mechanism); without a LoRA the slider falls back to the legacy behavior.
+
+### 🧹 Quality of life (this fork)
+
+- **Clear All** button — wipes the timeline content (images/videos/text + their prompts, paired audio) and the global prompt with a two-click guard. Settings, standalone audio, IC videos and MSR refs untouched.
+- **Track-gated LoRAs** — `ic_lora_name` / `msr_lora_name` are only applied when their track actually has content, so an unused selection never patches the model.
 
 Download workflows here: https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI/tree/main/example_workflows
 
