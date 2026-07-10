@@ -8,8 +8,13 @@ Guide were removed — the Director's MSR panel (timeline_data.msr) is the SINGL
 references (subjects, background, frame count). The Guide keeps only the model/sampling-side
 knobs: msr_lora_name, msr_lora_strength, msr_attention_strength. One path, no duplication.
 Hermetic + execute-level tests pass (mock VAE: pass-through byte-identical, panel injection
-appends 3 latent frames with crop metadata + keyframe_idxs, guardrails raise). Remaining: the
-LIVE verification matrix below (user-launched, GPU free), then merge to main.
+appends 3 latent frames with crop metadata + keyframe_idxs, guardrails raise).
+
+MERGED TO MAIN 2026-07-10 (user decision) with the LIVE verification matrix below still open --
+run items (a)/(b)/(c) when convenient; the inert path (no MSR refs -> byte-identical behavior)
+is hermetically proven, so unverified surface is limited to MSR-active runs. Later additions on
+top (same merge): per-image Guide Strength on the attention rail, AI Prompt (ai_prompt/),
+Clear All -- documented in the README, out of this plan's scope.
 
 ## Goal
 MSR (1–4 subject refs + background) as a fully **additive, optional** track in `LTXDirectorGuide`,
