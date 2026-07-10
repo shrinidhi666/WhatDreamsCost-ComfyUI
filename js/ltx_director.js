@@ -2279,6 +2279,28 @@ class TimelineEditor {
     deleteBtn.addEventListener("click", () => this.deleteSelectedSegment());
     this.deleteBtn = deleteBtn;
 
+    const clearAllBtn = document.createElement("button");
+    clearAllBtn.className = "pr-btn pr-btn-danger";
+    clearAllBtn.innerHTML = `${ICONS.trash} Clear All`;
+    clearAllBtn.title = "Remove all images/videos/text and their prompts from the timeline and clear the global prompt. Node settings, audio, IC videos and MSR references are untouched.";
+    clearAllBtn.addEventListener("click", () => {
+      // Two-step guard: first click arms, second click (within 2.5s) clears.
+      if (!this._clearAllArmed) {
+        this._clearAllArmed = true;
+        clearAllBtn.innerHTML = `${ICONS.trash} Sure?`;
+        this._clearAllTimer = setTimeout(() => {
+          this._clearAllArmed = false;
+          clearAllBtn.innerHTML = `${ICONS.trash} Clear All`;
+        }, 2500);
+        return;
+      }
+      clearTimeout(this._clearAllTimer);
+      this._clearAllArmed = false;
+      clearAllBtn.innerHTML = `${ICONS.trash} Clear All`;
+      this.clearAllContent();
+    });
+    this.clearAllBtn = clearAllBtn;
+
     actionGroup.appendChild(this.fileInput);
     actionGroup.appendChild(this.audioFileInput);
     actionGroup.appendChild(this.motionFileInput);
@@ -2290,6 +2312,7 @@ class TimelineEditor {
     actionGroup.appendChild(uploadMotionBtn);
     actionGroup.appendChild(msrBtn);
     actionGroup.appendChild(deleteBtn);
+    actionGroup.appendChild(clearAllBtn);
 
     // Retake-mode-only delete button (shown next to Add Video when retakeMode is on)
     const deleteRetakeBtn = document.createElement("button");
@@ -5092,6 +5115,28 @@ class TimelineEditor {
     this.render();
   }
 
+  clearAllContent() {
+    // Content only: main-track segments (images/videos/text + their local prompts)
+    // and the global prompt. Node settings/widgets, standalone audio clips, IC
+    // motion videos and MSR panel references are untouched.
+    const pairedAudioIds = new Set(
+      this.timeline.segments
+        .filter(s => s.id && s.id.endsWith("_v"))
+        .map(s => s.id.slice(0, -2) + "_a")
+    );
+    this.timeline.segments = [];
+    this.timeline.audioSegments = this.timeline.audioSegments.filter(s => !pairedAudioIds.has(s.id));
+
+    if (this.globalPromptInput) this.globalPromptInput.value = "";
+    this.syncGlobalPrompt("");
+
+    this.selectedIndex = -1;
+    this.selectedSegmentIds = [];
+    this.updateUIFromSelection();
+    this.commitChanges();
+    this.render();
+  }
+
   getCanonicalTrack(track) {
     if (track === "image" || track === "video" || track === "text") return "image";
     if (track === "audio") return "audio";
@@ -5837,6 +5882,7 @@ class TimelineEditor {
     if (this.uploadAudioBtn) this.uploadAudioBtn.style.display = isRetake ? "none" : "";
     if (this.uploadMotionBtn) this.uploadMotionBtn.style.display = isRetake ? "none" : "";
     if (this.deleteBtn) this.deleteBtn.style.display = isRetake ? "none" : "";
+    if (this.clearAllBtn) this.clearAllBtn.style.display = isRetake ? "none" : "";
     // deleteRetakeBtn is visible whenever Retake Mode is active
     if (this.deleteRetakeBtn) {
       this.deleteRetakeBtn.style.display = isRetake ? "" : "none";
