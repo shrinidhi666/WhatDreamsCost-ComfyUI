@@ -358,7 +358,7 @@ class LTXDirectorGuide:
                 "image_width": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Resolution (WIDTH) the guide image is fed into LTXVPreprocess at. 0 = native full-res (highest quality). Set BOTH image_width and image_height for an exact resolution (like ImageResizeKJv2). The image is resized to the latent grid afterward for encoding."}),
                 "image_height": ("INT", {"default": 0, "min": 0, "max": 8192, "step": 32, "tooltip": "Resolution (HEIGHT) the guide image is fed into LTXVPreprocess at. 0 = native full-res (highest quality). Set BOTH image_width and image_height for an exact resolution (like ImageResizeKJv2). The image is resized to the latent grid afterward for encoding."}),
                 "img_compression": ("INT", {"default": 18, "min": 0, "max": 100, "step": 1, "tooltip": "CRF preprocess (LTXVPreprocess) applied to the guide image at THIS stage. 0 = none. This is the only place compression happens — set per stage (e.g. 22 for the prepass, 18 for the upscale)."}),
-                "image_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "image_attention_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Master guide-attention strength for image keyframes. Each keyframe's own Guide Strength (set per segment in the Director timeline) MULTIPLIES this, giving true per-image weighting on the attention rail."}),
                 "crop": (["disabled", "center"], {"default": "center"}),
                 "auto_snap_ic_grid": ("BOOLEAN", {"default": True}),
                 "use_tiled_encode": ("BOOLEAN", {"default": False}),
@@ -657,8 +657,14 @@ class LTXDirectorGuide:
                     positive, negative, frame_idx, latent_image, noise_mask, guide_latent, strength, scale_factors
                 )
                 if is_lora_active:
-                    positive = _append_guide_attention_entry(positive, tokens_added, guide_orig_shape, attention_strength=image_attention_strength)
-                    negative = _append_guide_attention_entry(negative, tokens_added, guide_orig_shape, attention_strength=image_attention_strength)
+                    # Per-image strength on the channel that actually steers in LTX 2.3: the
+                    # noise mask above is the weak channel (keyframe tokens are always injected
+                    # at full presence), so the segment's Guide Strength also scales THIS image's
+                    # attention entry -- image_attention_strength stays the master fader
+                    # (defaults 1.0 x 1.0 = previous behavior). Mirrors the motion track's
+                    # per-segment videoAttentionStrength.
+                    positive = _append_guide_attention_entry(positive, tokens_added, guide_orig_shape, attention_strength=image_attention_strength * strength)
+                    negative = _append_guide_attention_entry(negative, tokens_added, guide_orig_shape, attention_strength=image_attention_strength * strength)
 
             # B. Process Motion Video Segments
             for seg in segments:
