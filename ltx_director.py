@@ -544,12 +544,17 @@ def _resize_image(tensor: torch.Tensor, target_w: int, target_h: int, method: st
 
     elif method == "crop":
         ratio = max(tw / W, th / H)
-        new_w = int(W * ratio)
-        new_h = int(H * ratio)
+        # ceil + clamp: the cover scale must actually COVER the target. int() truncation
+        # once left the covering side one pixel short (941 * (1024/941) == 1023.999...),
+        # the crop offset went to -1 (Python floors negative division), and the negative
+        # slice start wrapped around to produce a 1-pixel-tall image that crashed the
+        # MSR frame stack. Offsets are clamped too so a crop can never go negative.
+        new_w = max(tw, math.ceil(W * ratio))
+        new_h = max(th, math.ceil(H * ratio))
         inner = scale(t_nchw, new_w, new_h)
 
-        left = (new_w - tw) // 2
-        top = (new_h - th) // 2
+        left = max(0, (new_w - tw) // 2)
+        top = max(0, (new_h - th) // 2)
         resized = inner[:, :, top:top+th, left:left+tw]
 
     else:
