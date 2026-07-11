@@ -409,16 +409,22 @@ class LTXDirectorGuide:
             log.warning("[LTXDirectorGuide] MSR inputs are ignored in Retake Mode.")
             msr_active = False
 
-        # Track-gated LoRA loading: each LoRA is applied ONLY when its track has content, so an
+        # Track-gated LoRA loading: each LoRA is applied ONLY when ITS track has content, so an
         # unused track never patches the model. Both can chain (control first, identity second).
-        timeline_used = len(images) > 0 or len(segments) > 0 or is_retake_active
+        # The ic (control) LoRA's track is the MOTION/VIDEO rail (+ retake, whose source video
+        # rides the same rail) -- image keyframes deliberately do NOT enable it: a control LoRA
+        # with no control signal degrades motion/prompt adherence, flips the keyframe encode to
+        # the LoRA's downscale factor (dilation + grid snap), and activates attention entries.
+        # Verified same-seed: keyframes-only with the union LoRA selected must generate
+        # byte-identically to ic_lora_name=None.
+        control_used = len(segments) > 0 or is_retake_active
         latent_downscale_factor = 1.0
         ic_lora_applied = False
-        if model is not None and ic_lora_name != "None" and timeline_used:
+        if model is not None and ic_lora_name != "None" and control_used:
             model, latent_downscale_factor = _load_lora_model_only(model, ic_lora_name, ic_lora_strength)
             ic_lora_applied = True
         elif ic_lora_name != "None":
-            log.info("[LTXDirectorGuide] ic_lora '%s' not applied (no timeline guides or no model connected).", ic_lora_name)
+            log.info("[LTXDirectorGuide] ic_lora '%s' not applied (no motion/retake video on the timeline, or no model connected).", ic_lora_name)
 
         msr_downscale_factor = 1.0
         msr_lora_applied = False

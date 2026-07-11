@@ -68,9 +68,10 @@ No MSR inputs connected → the node behaves byte-identically to today.
   first draft were REMOVED — one path, no duplication).
 
 ### Track-gated LoRA loading (LoRAs used ONLY when their track has content)
-- `ic_lora_name` is applied **only if** the timeline has guides (images/motion/retake)
-  (previously it loaded whenever model+name were set, even with an empty timeline — fixed here:
-  same "additive" principle).
+- `ic_lora_name` is applied **only if** the timeline has MOTION/RETAKE video content
+  (previously it loaded whenever model+name were set — first tightened to any-guides, then
+  further to motion/retake-only after a same-seed test showed image keyframes alone were
+  enabling the control LoRA and degrading generation; keyframes never enable a LoRA).
 - `msr_lora_name` is applied **only if** the MSR panel has a background + ≥1 subject.
 - Both present → chain: `model → ic_lora → msr_lora` (order: control first, identity second;
   chaining order of summed LoRA patches is mathematically commutative in ComfyUI).
