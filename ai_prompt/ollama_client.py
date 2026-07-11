@@ -17,7 +17,10 @@ import urllib.request
 
 DEFAULT_URL = "http://localhost:11434"
 DEFAULT_KEEP_ALIVE = "10s"
-DEFAULT_NUM_CTX = 32768
+# 128K, the project standard for this model (matches vector-lab's LLM_NUM_CTX): the
+# writing pass runs with thinking enabled and must never be starved for context, and
+# nothing may ever be silently truncated to fit a smaller window.
+DEFAULT_NUM_CTX = 131072
 # Vision + a long system skill on a big local model: the first call also pays the model
 # load, which can take minutes on a card that needs CPU offload.
 REQUEST_TIMEOUT_SECS = 600
