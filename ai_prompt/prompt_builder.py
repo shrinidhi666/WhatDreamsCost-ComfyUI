@@ -129,30 +129,32 @@ _REF_PUNCTUATION_LAW = (
 
 
 def build_subject_reading_prompt():
-    """Read ONE subject reference: a recurring figure, object or prop (possibly a
-    multi-view sheet of the same entity)."""
+    """Describe ONE image, dumb and simple. All MSR semantics (slot order, numbering,
+    roles, the enumeration format) are CODE -- the model only describes what it sees.
+    The rules below exist because a group shot was once collapsed to just the product
+    beside the characters (every figure must be kept), and per the MSR card over- and
+    under-description both degrade consistency (hence: concise but accurate)."""
     return (
-        "You are reading ONE identity reference image for a video. It shows one recurring"
-        " figure, object or prop. It may be a MULTI VIEW SHEET showing the SAME entity from"
-        " several angles in one image: describe the ONE entity it depicts, never the sheet's"
-        " panels.\n"
-        "Write ONE tight clause with only the distinguishing features: hair, attire, build,"
-        " colours for a figure; form, material, colours for an object. Over description and"
-        " under description BOTH degrade consistency. Plain visual English, no proper names,"
-        " no mythological labels. " + _REF_PUNCTUATION_LAW)
+        "Describe what this image contains, concisely and accurately.\n"
+        "- If there are figures or characters: describe EVERY one of them briefly with what"
+        " tells them apart (attire, colours, build, size). Never skip a figure. An object"
+        " among figures is mentioned after them, briefly.\n"
+        "- If it is an object or product: its form, material, colours, any label art.\n"
+        "- If it shows the SAME thing from several angles: describe that one thing once.\n"
+        "Write ONE tight clause (several figures may take one short clause each). Plain"
+        " visual English, no proper names, no mythological labels. " + _REF_PUNCTUATION_LAW)
 
 
 def build_scene_reading_prompt():
-    """Read the ONE scene reference: the real location the video happens in. The 'real
-    place' prior is load-bearing -- a squashed extreme-aspect photo of shelving was once
-    read as an 'abstract pattern' without it."""
+    """Describe ONE place image, dumb and simple. The 'real place' prior is load-bearing:
+    a squashed extreme-aspect photo of shelving was once read as an 'abstract pattern'
+    without it."""
     return (
-        "You are reading the SCENE reference image for a video: the LOCATION the video"
-        " happens in. It is a photograph or render of a REAL PLACE (a room, a street, a"
-        " shop, a landscape, an interior). Name the kind of place you see and its look:"
-        " architecture or fixtures, palette, light. NEVER describe it as abstract, a"
-        " pattern, a texture or a glitch; it is a place, even when the photo is very tall"
-        " or very wide.\n"
+        "Describe the place shown in this image, concisely and accurately: what kind of"
+        " place it is, its fixtures or architecture, palette and light. It is a photograph"
+        " or render of a REAL PLACE (a room, a street, a shop, a landscape); NEVER describe"
+        " it as abstract, a pattern, a texture or a glitch, even when the photo is very"
+        " tall or very wide.\n"
         "Write ONE tight clause. Plain visual English, no proper names. "
         + _REF_PUNCTUATION_LAW)
 
