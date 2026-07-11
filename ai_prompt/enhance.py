@@ -246,7 +246,7 @@ def run(payload, input_dir):
             raw = ollama_client.generate_vision(
                 prompt, [image_b64], model,
                 system=None, base_url=base_url,
-                temperature=0.4, num_ctx=num_ctx, think=False, keep_alive=keep_alive,
+                temperature=0.4, num_ctx=num_ctx, think=True, keep_alive=keep_alive,
             )
             return prompt_builder.clean_ref_clause(raw, what)
 
