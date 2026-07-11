@@ -9,9 +9,9 @@ the stdlib -- the node pack stays whole without any outside project.
 The contract (TWO-PASS, a departure from the CLI's single call -- a subject reference was
 once described from the keyframe next to it, because a flat image list forces the model to
 COUNT images):
-  - PASS 1 (references only, when MSR refs exist): the model sees ONLY the subject
-    reference(s) + the scene reference and returns one clause per image (SUBJECT j: /
-    SCENE: labels, hard-parsed). format_enumeration() composes the official
+  - PASS 1 (references, when MSR refs exist): each reference is read in ITS OWN vision
+    call -- one image, one role-specific instruction (subject vs scene), one clause back
+    (clean_ref_clause, hard-errors on empty). format_enumeration() composes the official
     "Reference image N:" enumeration from those clauses.
   - PASS 2 (the writing pass): the model sees ONLY the beat images, receives the
     enumeration as FIXED TEXT, and writes LABELED SECTIONS -- "GLOBAL:" (narration only;
@@ -112,76 +112,58 @@ LOCKED_RULES = """CRITICAL OUTPUT RULES (follow ALL):
   happens; the words describe only WHAT happens."""
 
 
-# ---- Pass 1: reference reading (perception only) ---------------------------------------
+# ---- Reference reading (perception only, ONE image per call) ---------------------------
 #
-# WHY TWO PASSES: a vision call receives a FLAT, unlabeled image list, and a text-only
-# mapping ("IMAGE 2 = MSR SUBJECT reference 1") requires the model to COUNT images --
-# multi-image ordinal binding is unreliable, and a subject reference was once described
-# from the keyframe sitting next to it. So the references are read ALONE in their own
-# call (nothing else to confuse them with), and the main pass receives the finished
-# enumeration as FIXED TEXT -- attribution never depends on counting again.
+# WHY ONE IMAGE PER CALL: a vision call with a flat image list forces the model to COUNT
+# images, and a subject reference was once described from the keyframe sitting next to it;
+# a batched reference pass then misread an extreme-portrait scene as an "abstract pattern"
+# under generic instructions. Each reference is now read in ITS OWN call with a
+# role-specific instruction -- there is nothing else in the call to confuse it with, and
+# the scene prompt carries a strong "this is a real place" prior. The main pass receives
+# the finished enumeration as FIXED TEXT; attribution never depends on counting.
 
-def build_ref_reading_prompt(msr_count):
-    """The pass-1 prompt: msr_count SUBJECT references followed by ONE SCENE reference,
-    each to be described in one tight clause. Labeled output, hard-parsed."""
-    if msr_count < 1:
-        raise ValueError("build_ref_reading_prompt needs at least one subject.")
-    lines = [
-        "You are reading IDENTITY REFERENCE images for a video's identity lock.",
-        f"You are shown {msr_count + 1} images, in this exact order:",
-    ]
-    for j in range(1, msr_count + 1):
-        lines.append(f"  IMAGE {j} = SUBJECT reference {j} -- one recurring figure, object or"
-                     " prop. It may itself be a MULTI-VIEW SHEET (the same entity from several"
-                     " angles in one image): describe the ONE entity it depicts, never the"
-                     " sheet's individual panels.")
-    lines.append(f"  IMAGE {msr_count + 1} = the SCENE reference -- the location the video"
-                 " happens in.")
-    lines += [
-        "",
-        "For EACH image write ONE tight clause with only the distinguishing features:",
-        "hair, attire, build, colours for a figure; form, material, colours for an object;",
-        "architecture, palette, light for the scene. Over description and under description",
-        "BOTH degrade consistency. Plain visual English, no proper names, no mythological",
-        "labels. PUNCTUATION: only letters, digits, spaces, periods, commas and apostrophes",
-        "inside the clauses. NEVER a hyphen or dash, even inside words (write \"gold trimmed\",",
-        "never \"gold-trimmed\"). Strictly ASCII.",
-        "",
-        "Output ONLY these labeled lines, each label at the start of its own line, exactly:",
-    ]
-    for j in range(1, msr_count + 1):
-        lines.append(f"SUBJECT {j}: <one clause for IMAGE {j}>")
-    lines.append(f"SCENE: <one clause for IMAGE {msr_count + 1}>")
-    lines.append("No preamble, no extra lines.")
-    return "\n".join(lines)
+_REF_PUNCTUATION_LAW = (
+    "PUNCTUATION: only letters, digits, spaces, periods, commas and apostrophes. NEVER a"
+    " hyphen or dash, even inside words (write \"gold trimmed\", never \"gold-trimmed\")."
+    " Strictly ASCII. Output the clause ONLY, no label, no preamble, no quotes.")
 
 
-_REF_LABEL_RE = re.compile(r"^\s*(SUBJECT\s+(\d+)|SCENE)\s*:\s*", re.IGNORECASE | re.MULTILINE)
+def build_subject_reading_prompt():
+    """Read ONE subject reference: a recurring figure, object or prop (possibly a
+    multi-view sheet of the same entity)."""
+    return (
+        "You are reading ONE identity reference image for a video. It shows one recurring"
+        " figure, object or prop. It may be a MULTI VIEW SHEET showing the SAME entity from"
+        " several angles in one image: describe the ONE entity it depicts, never the sheet's"
+        " panels.\n"
+        "Write ONE tight clause with only the distinguishing features: hair, attire, build,"
+        " colours for a figure; form, material, colours for an object. Over description and"
+        " under description BOTH degrade consistency. Plain visual English, no proper names,"
+        " no mythological labels. " + _REF_PUNCTUATION_LAW)
 
 
-def parse_ref_readings(text, msr_count):
-    """Parse pass-1 output into (subject_clauses, scene_clause). HARD error on any missing
-    or empty label -- contract style, never scrubbed."""
-    matches = list(_REF_LABEL_RE.finditer(text or ""))
-    if not matches:
-        raise ValueError("Reference-reading output has no SUBJECT/SCENE labels. Full output:\n"
-                         + str(text))
-    found = {}
-    for k, m in enumerate(matches):
-        body_end = matches[k + 1].start() if k + 1 < len(matches) else len(text)
-        body = " ".join(text[m.end():body_end].split())
-        key = "SCENE" if m.group(1).upper().startswith("SCENE") else int(m.group(2))
-        if key in found:
-            raise ValueError(f"Reference-reading output repeats the {key} label.")
-        found[key] = body
-    subjects = []
-    for j in range(1, msr_count + 1):
-        if not found.get(j):
-            raise ValueError(f"Reference-reading output is missing a non-empty SUBJECT {j}.")
-        subjects.append(found[j])
-    if not found.get("SCENE"):
-        raise ValueError("Reference-reading output is missing a non-empty SCENE.")
-    return subjects, found["SCENE"]
+def build_scene_reading_prompt():
+    """Read the ONE scene reference: the real location the video happens in. The 'real
+    place' prior is load-bearing -- a squashed extreme-aspect photo of shelving was once
+    read as an 'abstract pattern' without it."""
+    return (
+        "You are reading the SCENE reference image for a video: the LOCATION the video"
+        " happens in. It is a photograph or render of a REAL PLACE (a room, a street, a"
+        " shop, a landscape, an interior). Name the kind of place you see and its look:"
+        " architecture or fixtures, palette, light. NEVER describe it as abstract, a"
+        " pattern, a texture or a glitch; it is a place, even when the photo is very tall"
+        " or very wide.\n"
+        "Write ONE tight clause. Plain visual English, no proper names. "
+        + _REF_PUNCTUATION_LAW)
+
+
+def clean_ref_clause(text, what):
+    """Whitespace-collapse a single-clause reading; HARD error when empty (contract style,
+    never scrubbed)."""
+    s = " ".join((text or "").split())
+    if not s:
+        raise ValueError(f"Reference reading for {what} came back empty.")
+    return s
 
 
 def format_enumeration(subject_clauses, scene_clause):

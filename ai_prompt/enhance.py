@@ -240,12 +240,21 @@ def run(payload, input_dir):
     ref_images, msr_count = collect_msr_refs(payload, input_dir)
     enumeration = ""
     if msr_count:
-        ref_raw = ollama_client.generate_vision(
-            prompt_builder.build_ref_reading_prompt(msr_count), ref_images, model,
-            system=None, base_url=base_url,
-            temperature=0.4, num_ctx=num_ctx, think=False, keep_alive=keep_alive,
-        )
-        subject_clauses, scene_clause = prompt_builder.parse_ref_readings(ref_raw, msr_count)
+        # ONE image per call: role-specific instruction, nothing else in the call to
+        # confuse it with. Subjects in panel order, then the scene.
+        def read_ref(image_b64, prompt, what):
+            raw = ollama_client.generate_vision(
+                prompt, [image_b64], model,
+                system=None, base_url=base_url,
+                temperature=0.4, num_ctx=num_ctx, think=False, keep_alive=keep_alive,
+            )
+            return prompt_builder.clean_ref_clause(raw, what)
+
+        subject_clauses = [
+            read_ref(img, prompt_builder.build_subject_reading_prompt(), f"subject {j}")
+            for j, img in enumerate(ref_images[:msr_count], start=1)]
+        scene_clause = read_ref(ref_images[msr_count],
+                                prompt_builder.build_scene_reading_prompt(), "the scene")
         enumeration = prompt_builder.format_enumeration(subject_clauses, scene_clause)
 
     global_only = bool(payload.get("global_only"))
