@@ -4000,6 +4000,21 @@ class TimelineEditor {
     return !!(m && (m.background || (m.subjects || []).some(s => s)));
   }
 
+  // Auto frame count: each reference must occupy WHOLE 8-frame latent blocks (the video
+  // VAE compresses time 8:1), so frameCount = 8 x refs + 1 — the dropdown's values map
+  // exactly: 17=2 refs, 25=3, 33=4, 41=5. Misaligned counts (e.g. 17 with 3 refs) smear
+  // neighbouring references into the same latent block and visibly dirty the identity.
+  // Runs on every panel content change; the dropdown remains a manual override until the
+  // next content change. (The official MSR sample uses 41 with 5 refs — same rule.)
+  _msrAutoFrameCount() {
+    const m = this._ensureMsr();
+    const refs = (m.subjects || []).filter(s => s).length + (m.background ? 1 : 0);
+    const auto = 8 * refs + 1;
+    if ([17, 25, 33, 41].includes(auto)) {
+      m.frameCount = auto;
+    }
+  }
+
   _msrSlotUrl(imageFile) {
     if (!imageFile) return "";
     const idx = imageFile.lastIndexOf("/");
@@ -4021,6 +4036,7 @@ class TimelineEditor {
       const msr = this._ensureMsr();
       if (slotKey === "background") msr.background = imageFile;
       else msr.subjects[slotKey] = imageFile;
+      this._msrAutoFrameCount();
       this.commitChanges();
       this._refreshMsrPanel();
     } catch (e) {
@@ -4032,6 +4048,7 @@ class TimelineEditor {
     const msr = this._ensureMsr();
     if (slotKey === "background") msr.background = "";
     else msr.subjects[slotKey] = "";
+    this._msrAutoFrameCount();
     this.commitChanges();
     this._refreshMsrPanel();
   }
@@ -4109,7 +4126,7 @@ class TimelineEditor {
     panel.appendChild(fcLabel);
 
     const fcSelect = document.createElement("select");
-    fcSelect.title = "Frames in the composed MSR reference clip (split across subjects + background)";
+    fcSelect.title = "Frames in the composed MSR reference clip. AUTO-SET to 8 x refs + 1 whenever you add/remove references (17 = 2 refs, 25 = 3, 33 = 4, 41 = 5) so each reference fills whole latent blocks — misaligned counts smear references into each other. Change it manually to override until the refs change again.";
     fcSelect.style.cssText = "background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;";
     for (const v of [17, 25, 33, 41]) {
       const opt = document.createElement("option");
