@@ -55,7 +55,12 @@ ones** -- there is NO fixed word cap; detail SCALES with shot type, never a hard
 
 **Match prompt LENGTH to video DURATION.** A 10-word prompt for a 10-second clip leaves the model
 without enough direction to fill the time -- a longer clip needs a fuller prompt. Under-writing a
-long shot is a common failure.
+long shot is a common failure. The official working target: **roughly 4 to 8 descriptive
+sentences** to cover all the key aspects of a typical clip (scale up for longer/closer shots).
+
+**Iterate.** LTX is built for fast experimentation: the official guidance is to START SIMPLE and
+LAYER instructions across runs -- the more actions/characters/instructions stacked into one
+prompt, the higher the chance some are dropped. First get the core beat right, then add.
 
 **Image-to-Video: do NOT re-describe the static elements already visible in the image.** Describe
 the MOTION, the camera, the lighting CHANGE and the AUDIO -- not what the still already shows. Re-
@@ -65,7 +70,9 @@ A complete LTX prompt covers, woven into prose (not bullets in the actual prompt
 
 1. **Shot / framing** -- camera scale and angle (section 2).
 2. **Subject + scene** -- who/what is in frame and the setting, as concrete VISUAL facts taken
-   from the image(s). Describe what is actually shown; do not invent identity or lore.
+   from the image(s). Describe what is actually shown; do not invent identity or lore. When there
+   is NO image to lean on (text-only / invented beats), DEFINE each character concretely: age,
+   hairstyle, clothing, distinguishing details -- and express emotion through physical cues.
 3. **The MOTION** -- the single clear thing that animates over the clip (section 3).
 4. **Camera move** -- what the lens does (section 4).
 5. **Lighting / mood** -- via physical light description, NOT emotion labels (section 5).
@@ -131,6 +138,12 @@ visible is the single biggest lever on how well it executes the camera. Prefer L
 words -- "dolly in", "dolly out", "dolly left / right", "jib up / down", "pan", "tilt", "orbit" --
 which the model reads most reliably.
 
+Official framing of the same rule: describe the CAMERA'S RELATIONSHIP TO THE SUBJECT, and include
+how subjects/objects appear AFTER the camera motion so the model knows how to finish the move.
+The official camera vocabulary (all read reliably): **follows, tracks, pans across, circles
+around, tilts upward, pushes in, pulls back, overhead view, handheld movement, over-the-shoulder,
+wide establishing shot, static frame.**
+
 ---
 
 ## 5. LIGHTING / MOOD -- physical light, never emotion labels
@@ -139,6 +152,37 @@ Set mood through described LIGHT, not adjectives like "sad" or "tense". Name sou
 colour, quality: "dim golden backlight, deep shadows, volumetric god-rays"; "hard low directional
 light, dust in the air"; "soft pink-orange dawn, cool blue shadows, mist on water". LTX renders
 light; it does not render the word "ominous". Let the light imply the feeling.
+
+Official visual-detail vocabulary (use as levers, not a checklist):
+- **Lighting conditions:** flickering candles, neon glow, natural sunlight, dramatic shadows,
+  backlighting, soft rim light, flickering lamps, golden hour.
+- **Textures:** rough stone, smooth metal, worn fabric, glossy surfaces.
+- **Color palette:** vibrant, muted, monochromatic, high contrast.
+- **Atmospheric elements:** fog, rain, mist, dust, particles, smoke, reflections -- weather and
+  atmosphere GROUND a scene and are a named LTX strength.
+
+---
+
+## 5b. STYLE / AESTHETIC -- name it EARLY in the prompt
+
+Stylized aesthetics work especially well **when named early in the prompt** (painterly, noir,
+analog film look, fashion editorial, pixelated animation, surreal). Official style vocabulary:
+
+- **Animation:** stop-motion, 2D animation, 3D animation, claymation, hand-drawn.
+- **Stylized:** comic book, cyberpunk, 8-bit pixel, surreal, minimalist, painterly, illustrated.
+- **Cinematic:** period drama, film noir, fantasy, epic space opera, thriller, modern romance,
+  experimental film, arthouse, documentary.
+- **Film characteristics:** jittery stop-motion, pixelated edges, lens flares, film grain.
+- **Scale indicators:** expansive, epic, intimate, claustrophobic.
+- **Pacing / temporal effects:** slow motion, time-lapse, lingering shot, continuous shot,
+  dynamic movement, sudden stop. (Official examples also use rapid cuts / freeze-frame /
+  fade-in / fade-out -- valid for LTX generally, but in a segment/relay pipeline each prompt is
+  ONE continuous shot, so keep cut/fade language OUT of per-segment prompts.)
+- **Visual effects (when relevant):** particle systems, motion blur, depth of field.
+
+LTX's named strengths to lean on: cinematic compositions with shallow depth of field; **emotive
+single-subject human moments** (subtle gestures, facial nuance); atmosphere/weather grounding;
+clean readable camera language; early-named stylized aesthetics; physical lighting anchors.
 
 ---
 
@@ -151,7 +195,12 @@ Because LTX 2.3 generates audio jointly (section 0), spend real attention here:
   sharp impact boom", "a soft bell tone") -- LTX syncs these to the matching motion.
 - **Music:** only if wanted, described plainly ("a low building drone", "a heroic sting").
 - **Spoken dialogue / VOICE:** LTX synthesizes the voice from the prompt -- so describe BOTH the
-  WORDS and HOW they sound. See section 7 for the exact pattern.
+  WORDS and HOW they sound. See section 7 for the exact pattern. Characters can talk AND SING,
+  in various languages.
+- **Volume words read reliably:** a quiet whisper, mutters, shouts, screams.
+- Official ambience examples: ambient coffeeshop noise, dripping rain and wind blowing, forest
+  ambience with birds singing. Official voice-style examples: energetic announcer, resonant
+  voice with gravitas, distorted radio-style, robotic monotone, childlike curiosity.
 
 ---
 
@@ -217,10 +266,13 @@ The official guide names specific things that DEGRADE an LTX prompt -- keep them
   appear in frame. (A product/brand showing is a render/compositing concern, not an LTX text
   request.)
 - **Complex physics** (intricate collisions, fluid/cloth simulation chains, precise mechanical
-  cause-and-effect). Keep motion physically simple and legible.
+  cause-and-effect). Keep motion physically simple and legible. Fast non-linear / fast-twisting
+  motion (jumping, juggling) is artifact-prone -- **dancing, however, works well**.
 - **Overloaded scenes** -- too many subjects/actions at once. One dominant subject and one
-  dominant motion read far better than a crowded prompt.
-- **Conflicting lighting** -- do not describe two incompatible light setups in one shot.
+  dominant motion read far better than a crowded prompt. The official cure is ITERATION: begin
+  simple, layer instructions on across runs (section 1).
+- **Conflicting lighting** -- do not describe two incompatible light setups in one shot
+  (e.g. "a warm sunset with cold fluorescent glow") unless the mix is clearly motivated.
 - **Vague prompts** -- "be specific and descriptive"; describe the FULL scene (subject, action,
   environment, lighting, camera, audio) in cinematic language professionals understand.
 
@@ -237,7 +289,9 @@ generic; carry the real intent in the positive.
 
 ## 10. QUICK CHECKLIST (does this prompt get what we want?)
 
-- [ ] Single flowing paragraph, present tense; prompt length matched to clip duration + shot scale.
+- [ ] Single flowing paragraph, present tense; prompt length matched to clip duration + shot scale
+      (~4-8 descriptive sentences for a typical clip).
+- [ ] Style/aesthetic (if any) named EARLY in the prompt.
 - [ ] Subject/scene taken from the image(s); nothing invented beyond what is shown. (I2V: do NOT
       re-describe static elements already in the frame.)
 - [ ] Shot scale + angle named explicitly.
@@ -258,6 +312,8 @@ generic; carry the real intent in the positive.
 - LTX-2 official repo README (ltx-core) -- https://github.com/Lightricks/LTX-2/blob/main/packages/ltx-core/README.md
 - LTX-2 Technical Report (joint audio-visual, audio VAE, vocoder) -- https://videos.ltx.io/LTX-2/grants/LTX_2_Technical_Report_compressed.pdf , https://arxiv.org/pdf/2601.03233
 - LTX-2.3 official prompt guide -- https://ltx.io/model/model-blog/ltx-2-3-prompt-guide
+- LTX-2 official prompting guide (blog: structure, 4-8 sentences, style-early, vocabulary banks,
+  sing/languages, dancing-vs-jumping, iterate) -- https://ltx.io/blog/prompting-guide-for-ltx-2
 - LTX-2.3 model overview -- https://ltx.io/model/ltx-2-3
 - LTX-2.3 Day-0 support in ComfyUI (enhanced audio-video) -- https://blog.comfy.org/p/ltx-23-day-0-supporte-in-comfyui
 - LTX-2.3 image+audio->video in ComfyUI (Next Diffusion) -- https://www.nextdiffusion.ai/tutorials/ltx-2-3-image-to-video-with-custom-audio-in-comfyui
