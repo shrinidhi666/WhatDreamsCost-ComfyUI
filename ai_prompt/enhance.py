@@ -56,15 +56,47 @@ def _beat_image_b64(seg, input_dir):
     return None
 
 
-def build_request(payload, input_dir):
-    """Turn the endpoint payload into (vision_prompt, system, images_b64, segments_out).
+def collect_msr_refs(payload, input_dir):
+    """Resolve the MSR panel references (pass-1 inputs): returns (ref_images_b64, count)
+    where the list is subjects in panel order followed by the background, or ([], 0) when
+    the panel is empty. Half-filled panels and missing files are HARD errors -- a silently
+    absent identity reference would generate a prompt that binds to nothing."""
+    try:
+        tdata = json.loads(payload.get("timeline_data") or "{}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"timeline_data is not valid JSON: {e}")
+    msr = tdata.get("msr") or {}
+    subjects = [s for s in (msr.get("subjects") or []) if s][:prompt_builder.MAX_MSR_SUBJECTS]
+    background = msr.get("background") or ""
+    if not subjects and not background:
+        return [], 0
+    if not subjects or not background:
+        raise ValueError("MSR needs at least one subject AND a background on the panel.")
+    images = []
+    for j, name in enumerate(subjects, start=1):
+        path = resolve_input_file(name, input_dir)
+        if not path:
+            raise ValueError(f"MSR subject {j} file not found in the input folder: {name}")
+        images.append(ollama_client.file_to_b64(path))
+    bg_path = resolve_input_file(background, input_dir)
+    if not bg_path:
+        raise ValueError(f"MSR background file not found in the input folder: {background}")
+    images.append(ollama_client.file_to_b64(bg_path))
+    return images, len(subjects)
+
+
+def build_request(payload, input_dir, enumeration="", global_only=False):
+    """Turn the endpoint payload into the PASS-2 pieces:
+    (vision_prompt, system, images_b64, segments_out). The images are the BEAT frames
+    ONLY -- MSR references never enter this call; they arrive as `enumeration`, the
+    finished text composed from pass 1.
 
     payload keys:
       timeline_data    -- the Director's serialized timeline JSON string (required)
       fps              -- frames per second (the Director's frame_rate widget)
       duration_frames  -- the clip length in frames (used only for invented windows)
       hint             -- the AI Prompt panel's user direction ("" = none)
-      segments_wanted  -- how many beats to invent when the timeline has none (>=1)
+      segments_wanted  -- desired TOTAL beat count (see the invention block below)
 
     segments_out is the response scaffold: one entry per beat, in time order, with the
     timeline segment id (or None for invented beats) and its start/length in frames --
@@ -114,6 +146,10 @@ def build_request(payload, input_dir):
     want = int(payload.get("segments_wanted") or 1)
     if want < 1:
         raise ValueError("segments_wanted must be >= 1.")
+    if global_only:
+        # Beats are context only in this mode -- a single full-clip window suffices when
+        # the timeline is empty; existing segments stay as-is (no invention, no writes).
+        want = min(want, max(1, len(beats)) if beats else 1)
     extra = want - len(beats)
     if extra > 0 and duration_frames > 0:
         spans = sorted((e["start"], e["start"] + e["length"]) for e in segments_out)
@@ -153,30 +189,7 @@ def build_request(payload, input_dir):
             segments_out = [p[0] for p in pairs]
             beats = [p[1] for p in pairs]
 
-    # --- MSR references from the Director's MSR panel (subjects first, background last --
-    # the panel order IS the enumeration order). A missing reference file is a HARD error:
-    # a silently absent identity reference would generate a prompt that binds to nothing.
-    msr = tdata.get("msr") or {}
-    subjects = [s for s in (msr.get("subjects") or []) if s][:prompt_builder.MAX_MSR_SUBJECTS]
-    background = msr.get("background") or ""
-    msr_count = 0
-    msr_bg = False
-    if subjects or background:
-        if not subjects or not background:
-            raise ValueError("MSR needs at least one subject AND a background on the panel.")
-        for j, name in enumerate(subjects, start=1):
-            path = resolve_input_file(name, input_dir)
-            if not path:
-                raise ValueError(f"MSR subject {j} file not found in the input folder: {name}")
-            images.append(ollama_client.file_to_b64(path))
-            msr_count += 1
-        bg_path = resolve_input_file(background, input_dir)
-        if not bg_path:
-            raise ValueError(f"MSR background file not found in the input folder: {background}")
-        images.append(ollama_client.file_to_b64(bg_path))
-        msr_bg = True
-
-    if not images:
+    if not images and not enumeration:
         raise ValueError("Nothing to look at: add images/videos to the timeline or MSR "
                          "references on the panel (or both) before generating.")
 
@@ -191,41 +204,74 @@ def build_request(payload, input_dir):
         audio_notes.append(f"clip '{name}' plays from {start_s:.1f}s for {length_s:.1f}s")
 
     prompt = prompt_builder.build_vision_prompt(
-        beats, msr_count=msr_count, msr_bg=msr_bg, audio_notes=audio_notes,
+        beats, enumeration=enumeration, audio_notes=audio_notes,
         motion=(payload.get("motion") or "free"),
         camera=(payload.get("camera") or "free"),
         audio=(payload.get("audio") or "full"),
         hint=(payload.get("hint") or ""),
+        global_only=global_only,
     )
     return prompt, prompt_builder.load_system_skill(), images, segments_out
 
 
 def run(payload, input_dir):
-    """The full core: build the request, call Ollama, parse the labeled sections, and
-    return the response dict for the browser. Raises ValueError (bad input) or
-    ollama_client.OllamaError (call failure) with user-displayable messages."""
+    """The full core, TWO passes when MSR references are on the panel:
+
+    PASS 1 (perception): the reference images ALONE -> one clause per reference
+    (SUBJECT j: / SCENE: labels, hard-parsed) -> format_enumeration() composes the
+    official "Reference image N:" opening. Low temperature, no thinking -- a faithful
+    description task, mirroring vector-lab's see().
+
+    PASS 2 (writing): the beat frames ALONE + the enumeration as fixed text -> GLOBAL
+    narration + per-beat SEGMENT prompts. The final global is COMPOSED here:
+    enumeration + narration -- so the enumeration can never be dropped, reordered, or
+    filled from the wrong image by the writing pass.
+
+    Raises ValueError (bad input / broken output contract) or ollama_client.OllamaError
+    (call failure) with user-displayable messages."""
     settings = payload.get("settings") or {}
     model = (settings.get("model") or "").strip()
     if not model:
         raise ValueError("No Ollama model set. Enter a model name in the AI Prompt panel.")
     base_url = (settings.get("url") or "").strip() or ollama_client.DEFAULT_URL
+    num_ctx = int(settings.get("num_ctx") or ollama_client.DEFAULT_NUM_CTX)
+    keep_alive = settings.get("keep_alive", ollama_client.DEFAULT_KEEP_ALIVE)
 
-    prompt, system, images, segments_out = build_request(payload, input_dir)
+    ref_images, msr_count = collect_msr_refs(payload, input_dir)
+    enumeration = ""
+    if msr_count:
+        ref_raw = ollama_client.generate_vision(
+            prompt_builder.build_ref_reading_prompt(msr_count), ref_images, model,
+            system=None, base_url=base_url,
+            temperature=0.4, num_ctx=num_ctx, think=False, keep_alive=keep_alive,
+        )
+        subject_clauses, scene_clause = prompt_builder.parse_ref_readings(ref_raw, msr_count)
+        enumeration = prompt_builder.format_enumeration(subject_clauses, scene_clause)
 
+    global_only = bool(payload.get("global_only"))
+    prompt, system, images, segments_out = build_request(payload, input_dir,
+                                                         enumeration=enumeration,
+                                                         global_only=global_only)
     raw = ollama_client.generate_vision(
         prompt, images, model,
         system=system or None,
         base_url=base_url,
         temperature=1.0,
-        num_ctx=int(settings.get("num_ctx") or ollama_client.DEFAULT_NUM_CTX),
+        num_ctx=num_ctx,
         think=True,
-        keep_alive=settings.get("keep_alive", ollama_client.DEFAULT_KEEP_ALIVE),
+        keep_alive=keep_alive,
     )
-    global_prompt, seg_prompts = prompt_builder.parse_sections(raw, len(segments_out))
+    n_expected = 0 if global_only else len(segments_out)
+    global_prompt, seg_prompts = prompt_builder.parse_sections(raw, n_expected)
+    if enumeration:
+        global_prompt = f"{enumeration} {global_prompt}"
+    if global_only:
+        segments_out = []
     for entry, text in zip(segments_out, seg_prompts):
         entry["prompt"] = text
     return {
         "global": global_prompt,
         "segments": segments_out,
-        "meta": {"model": model, "images": len(images)},
+        "meta": {"model": model, "images": len(images) + len(ref_images),
+                 "enumerated": bool(enumeration), "global_only": global_only},
     }

@@ -6,16 +6,21 @@ Vendored from vector-lab (insta_ltx.py / director_ltx.py) on 2026-07-10. This co
 authoritative for the node; the vector-lab CLI evolves independently. No imports outside
 the stdlib -- the node pack stays whole without any outside project.
 
-The contract (unchanged from the CLI):
-  - the model receives beat images (timeline keyframes / video first-frames) in time order,
-    then MSR subject references, then the MSR background reference, plus a text description
-    of every beat window;
-  - it outputs LABELED SECTIONS -- "GLOBAL:" then "SEGMENT 1:".."SEGMENT N:" -- one flowing
+The contract (TWO-PASS, a departure from the CLI's single call -- a subject reference was
+once described from the keyframe next to it, because a flat image list forces the model to
+COUNT images):
+  - PASS 1 (references only, when MSR refs exist): the model sees ONLY the subject
+    reference(s) + the scene reference and returns one clause per image (SUBJECT j: /
+    SCENE: labels, hard-parsed). format_enumeration() composes the official
+    "Reference image N:" enumeration from those clauses.
+  - PASS 2 (the writing pass): the model sees ONLY the beat images, receives the
+    enumeration as FIXED TEXT, and writes LABELED SECTIONS -- "GLOBAL:" (narration only;
+    the caller prepends the enumeration) then "SEGMENT 1:".."SEGMENT N:" -- one flowing
     present-tense paragraph each. A missing label is a HARD error (fix the prompt, never
     scrub the output).
   - timing flows IN as pacing guidance only; the output prompts must never contain seconds,
-    frame numbers, or duration words (node-etched rule -- the Director's frame windows set
-    the timing, prompt words must not fight them).
+    frame numbers, or duration words. Node-etched punctuation law: no hyphens or dashes of
+    any kind in generated prompts -- only letters, digits, spaces, . , ! " and apostrophes.
 """
 
 import re
@@ -82,50 +87,145 @@ MSR_RULES = """THE MSR RULES (etched -- follow ALL, no exceptions):
 # ---- Locked output rules (vendored from insta_ltx.py, + the node's no-timing rule) ----
 
 LOCKED_RULES = """CRITICAL OUTPUT RULES (follow ALL):
-- ASCII ONLY. Straight double quotes, -- for dashes, ... for pauses. No curly quotes,
-  no accents, no Unicode.
+- LIMITED PUNCTUATION, ASCII ONLY. Your writing uses ONLY letters, digits, spaces and
+  these marks: period, comma, exclamation mark, straight double quotes, apostrophe.
+  NEVER write a hyphen or dash of ANY kind, even inside words: write "close up",
+  "mid shot", "warm toned", "frame left" (never "close-up", "frame-left", never "--").
+  No colons, no semicolons, no parentheses, no question marks, no curly quotes, no
+  accents, no Unicode. Use ... for pauses. (Sole exception: when a fixed reference
+  enumeration is given to you, its "Reference image N:" labels keep their colon.)
 - PRESENT TENSE throughout. Describe what IS happening, like a cinematographer.
 - POSITIVE ONLY. Never write "no", "not", "without", "motionless", "silent". To say
   a figure does not move, write that the figure "holds its posture locked in place".
 - NO PROPER NAMES, no place names, no compass directions. Point to each figure by
-  what it LOOKS LIKE + its FRAME-POSITION ONLY, e.g. "the figure in the red scarf in
-  frame-centre", "the bare-chested archer in frame-left foreground".
-- PLAIN-ENGLISH DESCRIPTORS. Describe any creature or being by its plain visual form
-  (e.g. "a colossal grey-skinned heavy-jawed creature", "a giant serpent", "a radiant
-  being") -- never a culture-specific or mythological label.
-- ACTION-LED. ONE main motion idea per segment. Do not invent new props, characters, or
-  architecture that are not visible in the image(s) -- with ONE exception: elements THE
+  what it LOOKS LIKE and its FRAME POSITION ONLY, e.g. "the figure in the red scarf in
+  frame centre", "the bare chested archer in frame left foreground".
+- PLAIN ENGLISH DESCRIPTORS. Describe any creature or being by its plain visual form
+  (e.g. "a colossal grey skinned heavy jawed creature", "a giant serpent", "a radiant
+  being"), never a culture specific or mythological label.
+- ACTION LED. ONE main motion idea per segment. Do not invent new props, characters, or
+  architecture that are not visible in the image(s), with ONE exception: elements THE
   USER'S BRIEF explicitly asks for ARE allowed; introduce them in plain visual terms
-  (look + frame-position), exactly like everything else.
+  (look and frame position), exactly like everything else.
 - NO TIMING WORDS. Never write seconds, frame numbers, durations, counts of time, or
-  playback-speed references into any prompt. The segment windows below size HOW MUCH
+  playback speed references into any prompt. The segment windows below size HOW MUCH
   happens; the words describe only WHAT happens."""
+
+
+# ---- Pass 1: reference reading (perception only) ---------------------------------------
+#
+# WHY TWO PASSES: a vision call receives a FLAT, unlabeled image list, and a text-only
+# mapping ("IMAGE 2 = MSR SUBJECT reference 1") requires the model to COUNT images --
+# multi-image ordinal binding is unreliable, and a subject reference was once described
+# from the keyframe sitting next to it. So the references are read ALONE in their own
+# call (nothing else to confuse them with), and the main pass receives the finished
+# enumeration as FIXED TEXT -- attribution never depends on counting again.
+
+def build_ref_reading_prompt(msr_count):
+    """The pass-1 prompt: msr_count SUBJECT references followed by ONE SCENE reference,
+    each to be described in one tight clause. Labeled output, hard-parsed."""
+    if msr_count < 1:
+        raise ValueError("build_ref_reading_prompt needs at least one subject.")
+    lines = [
+        "You are reading IDENTITY REFERENCE images for a video's identity lock.",
+        f"You are shown {msr_count + 1} images, in this exact order:",
+    ]
+    for j in range(1, msr_count + 1):
+        lines.append(f"  IMAGE {j} = SUBJECT reference {j} -- one recurring figure, object or"
+                     " prop. It may itself be a MULTI-VIEW SHEET (the same entity from several"
+                     " angles in one image): describe the ONE entity it depicts, never the"
+                     " sheet's individual panels.")
+    lines.append(f"  IMAGE {msr_count + 1} = the SCENE reference -- the location the video"
+                 " happens in.")
+    lines += [
+        "",
+        "For EACH image write ONE tight clause with only the distinguishing features:",
+        "hair, attire, build, colours for a figure; form, material, colours for an object;",
+        "architecture, palette, light for the scene. Over description and under description",
+        "BOTH degrade consistency. Plain visual English, no proper names, no mythological",
+        "labels. PUNCTUATION: only letters, digits, spaces, periods, commas and apostrophes",
+        "inside the clauses. NEVER a hyphen or dash, even inside words (write \"gold trimmed\",",
+        "never \"gold-trimmed\"). Strictly ASCII.",
+        "",
+        "Output ONLY these labeled lines, each label at the start of its own line, exactly:",
+    ]
+    for j in range(1, msr_count + 1):
+        lines.append(f"SUBJECT {j}: <one clause for IMAGE {j}>")
+    lines.append(f"SCENE: <one clause for IMAGE {msr_count + 1}>")
+    lines.append("No preamble, no extra lines.")
+    return "\n".join(lines)
+
+
+_REF_LABEL_RE = re.compile(r"^\s*(SUBJECT\s+(\d+)|SCENE)\s*:\s*", re.IGNORECASE | re.MULTILINE)
+
+
+def parse_ref_readings(text, msr_count):
+    """Parse pass-1 output into (subject_clauses, scene_clause). HARD error on any missing
+    or empty label -- contract style, never scrubbed."""
+    matches = list(_REF_LABEL_RE.finditer(text or ""))
+    if not matches:
+        raise ValueError("Reference-reading output has no SUBJECT/SCENE labels. Full output:\n"
+                         + str(text))
+    found = {}
+    for k, m in enumerate(matches):
+        body_end = matches[k + 1].start() if k + 1 < len(matches) else len(text)
+        body = " ".join(text[m.end():body_end].split())
+        key = "SCENE" if m.group(1).upper().startswith("SCENE") else int(m.group(2))
+        if key in found:
+            raise ValueError(f"Reference-reading output repeats the {key} label.")
+        found[key] = body
+    subjects = []
+    for j in range(1, msr_count + 1):
+        if not found.get(j):
+            raise ValueError(f"Reference-reading output is missing a non-empty SUBJECT {j}.")
+        subjects.append(found[j])
+    if not found.get("SCENE"):
+        raise ValueError("Reference-reading output is missing a non-empty SCENE.")
+    return subjects, found["SCENE"]
+
+
+def format_enumeration(subject_clauses, scene_clause):
+    """The exact enumeration text that OPENS the global prompt (MSR rule 4), numbered by
+    panel order (rule 3): subjects first, scene last. Composed by US from pass-1 clauses --
+    the writing pass can no longer mis-attribute or drop it."""
+    def clause(c):
+        c = c.strip().rstrip(".")
+        return c + "."
+    parts = [f"Reference image {j}: {clause(c)}"
+             for j, c in enumerate(subject_clauses, start=1)]
+    parts.append(f"Reference image {len(subject_clauses) + 1} (scene): {clause(scene_clause)}")
+    return " ".join(parts)
 
 
 # ---- The vision prompt ---------------------------------------------------------------
 
-def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
-                        motion="free", camera="free", audio="full", hint=""):
-    """The Director vision prompt, built from the ACTUAL timeline.
+def build_vision_prompt(beats, enumeration="", audio_notes=None,
+                        motion="free", camera="free", audio="full", hint="",
+                        global_only=False):
+    """The Director vision prompt (pass 2 of the two-pass flow), built from the ACTUAL
+    timeline. The ONLY images this pass receives are the beat frames -- the MSR references
+    were already read by pass 1 and arrive here as `enumeration`, finished text.
 
     `beats` -- list of dicts, one per timeline segment IN TIME ORDER:
         {"seconds": float,          # the segment's real window length
          "has_image": bool,         # True when a frame image is supplied for this beat
          "text": str}               # the user's existing rough prompt text ("" if none)
     Beats WITH an image consume vision-call IMAGE slots 1..n in order; the intro states
-    the beat -> IMAGE mapping explicitly. MSR subject references follow (msr_count of
-    them), then the MSR background reference when msr_bg is True.
+    the beat -> IMAGE mapping explicitly.
+    `enumeration` -- the FIXED reference enumeration composed from pass 1 ("" = no MSR).
+    The model writes the GLOBAL as NARRATION ONLY; the caller prepends the enumeration
+    (composition, so it can never be dropped or mis-attributed by the writing pass).
     `audio_notes` -- optional list of plain-text lines describing imported audio clips
     (context only; the model cannot hear them).
     `motion` / `camera` / `audio` -- the three orthogonal axes (see axes.py). The inert
     defaults ("free"/"free"/"full") inject nothing; other choices inject their directive
     block in the CLI's exact order: motion core, MSR block, camera, audio, locked rules.
-    `hint` -- THE USER'S BRIEF. Departure from the CLI's soft trailing "steer toward
-    this" nudge (which the 26b diluted in practice): the brief is stated EARLY as the
-    clip's authoritative creative direction AND re-stated at the end (models attend to
-    both ends), it explicitly outranks the model's own reading of the frames and the
-    axis directives, and the ACTION-LED rule carves out elements the brief asks for.
-    Only the output-FORMAT rules stay absolute. Empty hint injects nothing.
+    `hint` -- THE USER'S BRIEF: stated EARLY as the clip's authoritative creative
+    direction AND re-stated at the end, outranking the model's own reading of the frames
+    and the axis directives; only the output-format rules (and the MSR rules, when
+    references are in play) stay absolute. Empty hint injects nothing.
+    `global_only` -- write ONLY the GLOBAL prompt (the beats still inform it as context,
+    but no SEGMENT sections are demanded -- the panel's "global only" convenience mode).
     """
     if motion not in MOTION_CORES:
         raise ValueError(f"Unknown motion '{motion}'. Choices: {list(MOTION_CORES)}")
@@ -153,21 +253,12 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
         else:
             lines.append(f"  (story BEAT {i} has NO frame image -- invent what happens in it from"
                          " the surrounding beats, the references, and the beat notes below.)")
-    if msr_count:
-        for j in range(1, msr_count + 1):
-            img_idx += 1
-            lines.append(f"  IMAGE {img_idx} = MSR SUBJECT reference {j} -- an IDENTITY reference"
-                         " for one recurring figure (what they look like; NOT a frame of the"
-                         " video).")
-        if msr_bg:
-            img_idx += 1
-            lines.append(f"  IMAGE {img_idx} = MSR BACKGROUND reference -- the scene/location"
-                         " identity reference (NOT a frame of the video).")
-    if not any_image and msr_count:
+    if not any_image and enumeration:
         lines += [
             "",
-            "There are NO beat frames for this clip -- ONLY the identity references above exist.",
-            f"INVENT the {n_segments} story beat(s) yourself: what these referenced subjects do in",
+            "There are NO beat frames for this clip -- the referenced subjects and scene are",
+            "described in the FIXED ENUMERATION below.",
+            f"INVENT the {n_segments} story beat(s) yourself: what those referenced subjects do in",
             "the referenced scene, one beat per timeline segment, following THE USER'S BRIEF if",
             "one is given.",
         ]
@@ -196,49 +287,46 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
         for note in audio_notes:
             lines.append(f"  {note}")
 
-    lines += [
-        "",
-        "Your job: write the Director prompt set for this clip -- ONE GLOBAL prompt that anchors",
-        "the whole clip (subjects, setting, light, overall arc), and ONE SEGMENT prompt per beat",
-        "that narrates ONLY what happens inside that beat's window, in present tense, flowing",
-        "naturally out of the previous beat and into the next (one continuous shot, never a",
-        "scene cut).",
-    ]
+    if global_only:
+        lines += [
+            "",
+            "Your job: write ONE GLOBAL prompt that anchors the whole clip -- subjects, setting,",
+            "light, and the overall arc across all the beats above, in present tense, as one",
+            "continuous shot (never a scene cut). Segment prompts are handled separately; you",
+            "write ONLY the global.",
+        ]
+    else:
+        lines += [
+            "",
+            "Your job: write the Director prompt set for this clip -- ONE GLOBAL prompt that anchors",
+            "the whole clip (subjects, setting, light, overall arc), and ONE SEGMENT prompt per beat",
+            "that narrates ONLY what happens inside that beat's window, in present tense, flowing",
+            "naturally out of the previous beat and into the next (one continuous shot, never a",
+            "scene cut).",
+        ]
     hint = (hint or "").strip()
     if hint:
         lines += [
             "",
             "THE USER'S BRIEF (the clip's creative direction -- the finished prompts must",
             "VISIBLY realize this; it OUTRANKS your own reading of the frames and every axis",
-            "directive below; only the CRITICAL OUTPUT RULES stay absolute):",
+            "directive below; only the CRITICAL OUTPUT RULES"
+            + (" and THE MSR RULES" if enumeration else "") + " stay absolute):",
             f"  {hint}",
         ]
     intro = "\n".join(lines)
 
     msr_block = ""
-    if msr_count:
-        # The enumeration numbers references by their MSR PANEL order (subjects first,
-        # background last) -- NOT the vision-call IMAGE numbers above, so each line states
-        # the mapping explicitly to kill the ambiguity.
-        n_beat_images = sum(1 for b in beats if b.get("has_image"))
-        ref_lines = []
-        for j in range(1, msr_count + 1):
-            ref_lines.append(
-                f"  Reference image {j}: <the look of MSR SUBJECT reference {j} -- that is"
-                f" IMAGE {n_beat_images + j} above -- hair, attire, build, colours>."
-            )
-        if msr_bg:
-            scene_no = msr_count + 1
-            ref_lines.append(
-                f"  Reference image {scene_no} (scene): <the look of the MSR BACKGROUND reference"
-                f" -- that is IMAGE {n_beat_images + scene_no} above>."
-            )
+    if enumeration:
         msr_block = (
             MSR_RULES + "\n\n"
-            "For THIS run the enumeration is EXACTLY these lines, in this order (the numbering is\n"
-            "the MSR panel order per rule 3 -- NOT the IMAGE numbers of this vision call):\n"
-            + "\n".join(ref_lines) + "\n"
-            "Fill each from its actual reference image, then narrate the clip under rule 7.\n\n"
+            "The references were already READ in a separate pass. The enumeration for THIS clip\n"
+            "is FIXED and will be placed at the START of the GLOBAL prompt AUTOMATICALLY:\n"
+            f"  {enumeration}\n"
+            "Do NOT write or repeat the enumeration yourself -- write the GLOBAL as the NARRATION\n"
+            "that follows it. Narrate under rule 7: point at every referenced element by the\n"
+            "EXACT look enumerated above (never a name), so the reference tokens bind to your\n"
+            "prompt entities.\n\n"
         )
 
     # Axis blocks, in the CLI's exact order: motion core first, then MSR, then camera and
@@ -249,16 +337,23 @@ def build_vision_prompt(beats, msr_count=0, msr_bg=False, audio_notes=None,
     camera_block = CAMERA_CORES[camera]
     audio_block = AUDIO_DIRECTIVES[audio]
 
-    seg_labels = "\n".join(f"SEGMENT {i}: <present-tense paragraph for beat {i}'s window ONLY>"
-                           for i in range(1, n_segments + 1))
+    seg_labels = "" if global_only else (
+        "\n".join(f"SEGMENT {i}: <present-tense paragraph for beat {i}'s window ONLY>"
+                  for i in range(1, n_segments + 1)) + "\n")
     task = (
-        "\n\nNOW WRITE THE DIRECTOR PROMPTS. Output ONLY these labeled sections, each label at the"
-        " start of its own line, exactly:\n"
+        "\n\nNOW WRITE THE DIRECTOR PROMPT"
+        + ("" if global_only else "S")
+        + ". Output ONLY "
+        + ("this labeled section" if global_only else "these labeled sections")
+        + ", each label at the start of its own line, exactly:\n"
         "GLOBAL: <one flowing paragraph anchoring the whole clip"
-        + (" -- opening with the MSR reference enumeration" if msr_count else "")
+        + (" -- the NARRATION that follows the fixed enumeration, never the enumeration itself"
+           if enumeration else "")
         + ">\n"
-        + seg_labels + "\n"
-        "No preamble, no JSON, no headings beyond those labels, no bullets. Strictly ASCII."
+        + seg_labels
+        + "No preamble, no JSON, no headings beyond "
+        + ("that label" if global_only else "those labels")
+        + ", no bullets. Strictly ASCII."
     )
     brief_reminder = ""
     if hint:

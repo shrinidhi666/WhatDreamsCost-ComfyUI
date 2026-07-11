@@ -715,6 +715,7 @@ function parseInitial(jsonStr) {
           motion: typeof p.aiPrompt.motion === "string" ? p.aiPrompt.motion : "free",
           camera: typeof p.aiPrompt.camera === "string" ? p.aiPrompt.camera : "free",
           audio: typeof p.aiPrompt.audio === "string" ? p.aiPrompt.audio : "full",
+          globalOnly: !!p.aiPrompt.globalOnly,
         };
       }
       if (Array.isArray(p.segments)) {
@@ -4179,7 +4180,8 @@ class TimelineEditor {
       || (parseInt(a.segments, 10) || 1) !== 1
       || (a.motion && a.motion !== "free")
       || (a.camera && a.camera !== "free")
-      || (a.audio && a.audio !== "full")));
+      || (a.audio && a.audio !== "full")
+      || a.globalOnly));
   }
 
   _aiSettings() {
@@ -4273,6 +4275,21 @@ class TimelineEditor {
       "Audio fence: which sound layers exist. full = the model authors ambient, SFX, music and dialogue freely.");
     this._aiLoadChoices();
 
+    const globalOnlyLabel = document.createElement("label");
+    globalOnlyLabel.style.cssText = "display:flex;align-items:center;gap:3px;font-size:10px;color:#888;margin-left:4px;cursor:pointer;user-select:none;";
+    const globalOnlyCheck = document.createElement("input");
+    globalOnlyCheck.type = "checkbox";
+    globalOnlyCheck.title = "Write ONLY the global prompt (with the MSR enumeration when references are set). Timeline segments are used as context but their prompts are left untouched.";
+    globalOnlyCheck.addEventListener("change", () => {
+      this._ensureAiPrompt().globalOnly = globalOnlyCheck.checked;
+      this.commitChanges();
+    });
+    globalOnlyLabel.appendChild(globalOnlyCheck);
+    globalOnlyLabel.appendChild(document.createTextNode("global only"));
+    globalOnlyLabel.title = globalOnlyCheck.title;
+    this._aiGlobalOnlyCheck = globalOnlyCheck;
+    panel.appendChild(globalOnlyLabel);
+
     const modelInput = document.createElement("input");
     modelInput.type = "text";
     modelInput.placeholder = "ollama model, e.g. gemma4:26b-a4b-it-qat";
@@ -4354,6 +4371,7 @@ class TimelineEditor {
     setSel(this._aiMotionSelect, a.motion, "free");
     setSel(this._aiCameraSelect, a.camera, "free");
     setSel(this._aiAudioSelect, a.audio, "full");
+    if (this._aiGlobalOnlyCheck) this._aiGlobalOnlyCheck.checked = !!a.globalOnly;
     const s = this._aiSettings();
     if (this._aiModelInput) this._aiModelInput.value = s.model || "";
     if (this._aiUrlInput) this._aiUrlInput.value = s.url || "http://localhost:11434";
@@ -4381,6 +4399,7 @@ class TimelineEditor {
     if (this._aiMotionSelect) aip.motion = this._aiMotionSelect.value || "free";
     if (this._aiCameraSelect) aip.camera = this._aiCameraSelect.value || "free";
     if (this._aiAudioSelect) aip.audio = this._aiAudioSelect.value || "full";
+    if (this._aiGlobalOnlyCheck) aip.globalOnly = this._aiGlobalOnlyCheck.checked;
 
     // Serialize the timeline exactly as the Guide will read it, then send that string.
     this.commitChanges();
@@ -4396,6 +4415,7 @@ class TimelineEditor {
       motion: aip.motion || "free",
       camera: aip.camera || "free",
       audio: aip.audio || "full",
+      global_only: !!aip.globalOnly,
       settings: { model: settings.model, url: settings.url },
     };
 
@@ -4435,7 +4455,10 @@ class TimelineEditor {
       this.commitChanges();
       this.render();
       const note = data.meta && data.meta.vram_note ? ` (${data.meta.vram_note})` : "";
-      this._aiSetStatus(`Done — global + ${(data.segments || []).length} segment prompt(s) written. Review, tweak, then Queue.${note}`, false);
+      const summary = (data.meta && data.meta.global_only)
+        ? "global prompt written (global only)"
+        : `global + ${(data.segments || []).length} segment prompt(s) written`;
+      this._aiSetStatus(`Done — ${summary}. Review, tweak, then Queue.${note}`, false);
     } catch (e) {
       this._aiSetStatus(`AI Prompt request failed: ${e.message || e}`, true);
     } finally {
@@ -9420,6 +9443,7 @@ class TimelineEditor {
         motion: this.timeline.aiPrompt.motion || "free",
         camera: this.timeline.aiPrompt.camera || "free",
         audio: this.timeline.aiPrompt.audio || "full",
+        globalOnly: !!this.timeline.aiPrompt.globalOnly,
       } : null,
       segments: sortedSegments.map(s => {
         const { imgObj, videoEl, _isSeeking, thumbnails, _extractingThumbs, _sSecs, _lSecs, _tSecs, _dSecs, _uploading, _blobUrl, ...rest } = s;
