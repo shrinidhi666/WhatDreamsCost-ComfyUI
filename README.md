@@ -211,7 +211,7 @@ Lock the identity of up to **4 subjects + 1 background/scene** across the whole 
 **How to use:**
 1. Click the **MSR** button in the Director's toolbar to open the MSR panel.
 2. Drop **1–4 subject** references and **exactly one background** reference onto the panel slots. A subject reference may itself be a multi-view sheet (the same character from several angles in ONE image) — that's the strongest identity signal.
-3. Pick the reference **frame count** on the panel (`17 / 25 / 33 / 41`, default `17`).
+3. The reference **frame count** is auto-set to `8 x refs + 1` (`17` = 2 refs, `25` = 3, `33` = 4, `41` = 5) so each reference fills whole latent blocks — a mismatched count smears neighbouring references together. The dropdown remains a manual override.
 4. On the **LTX Director Guide** node, select the LoRA in `msr_lora_name` (leave strength at `1.0` to start).
 5. Open your **global prompt** with the reference enumeration — one tight clause per reference, subjects first, scene last — then narrate the clip pointing at every referenced element by its enumerated look (never by a name):
 
