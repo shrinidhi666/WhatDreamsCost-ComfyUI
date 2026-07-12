@@ -601,11 +601,16 @@ class LTXDirectorGuide:
                     msr_guide_latent = msr_guide_latent[:, :, :latent_length]
                 msr_guide_shape = list(msr_guide_latent.shape[2:])
 
-                B_g, _, F_g, H_g, W_g = msr_guide_latent.shape
-                msr_guide_mask = torch.ones((B_g, 1, F_g, H_g, W_g), device=msr_guide_latent.device, dtype=msr_guide_latent.dtype)
+                # References must enter the sampler FROZEN (append_keyframe fills noise level
+                # 1 - strength = 0), exactly like the official Licon-MSR flow: no guide_mask
+                # unless dilation creates one. A ones mask here means "regenerate" and made
+                # the sampler paint the reference collage into the first second of the output.
+                msr_guide_mask = None
                 msr_ldf = int(max(1, round(float(msr_downscale_factor))))
                 if msr_ldf > 1:
-                    dilated = _dilate_latent({"samples": msr_guide_latent, "noise_mask": msr_guide_mask}, horizontal_scale=msr_ldf, vertical_scale=msr_ldf)
+                    B_g, _, F_g, H_g, W_g = msr_guide_latent.shape
+                    base_mask = torch.ones((B_g, 1, F_g, H_g, W_g), device=msr_guide_latent.device, dtype=msr_guide_latent.dtype)
+                    dilated = _dilate_latent({"samples": msr_guide_latent, "noise_mask": base_mask}, horizontal_scale=msr_ldf, vertical_scale=msr_ldf)
                     msr_guide_mask = dilated["noise_mask"]
                     msr_guide_latent = dilated["samples"]
 
