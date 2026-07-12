@@ -619,7 +619,15 @@ class LTXDirectorGuide:
             # strength 1.0 and the MSR LoRA's own downscale factor, matching the official
             # Licon-MSR sample (LTXAddVideoICLoRAGuide frame_idx=0, strength=1, factor=1).
             if msr_active:
-                msr_frames = _build_msr_guide(msr_subjects, msr_background, target_pix_w, target_pix_h, msr_frame_count, resize_method=msr_resize_method)
+                # Compose the reference clip at the Guide's stage resolution (image_width /
+                # image_height — the same knob the image guides are prepped at); the encoder
+                # then fits it to the latent grid. The official sample composes at full
+                # output resolution the same way. 0 = base-latent pixels, as before.
+                if image_width > 0 and image_height > 0:
+                    msr_pix_w, msr_pix_h = int(image_width), int(image_height)
+                else:
+                    msr_pix_w, msr_pix_h = target_pix_w, target_pix_h
+                msr_frames = _build_msr_guide(msr_subjects, msr_background, msr_pix_w, msr_pix_h, msr_frame_count, resize_method=msr_resize_method)
                 _, msr_guide_latent = _encode_video_iclora_guide(
                     vae, latent_width, latent_height, msr_frames, scale_factors,
                     msr_downscale_factor, crop, use_tiled_encode, tile_size, tile_overlap,
