@@ -5894,7 +5894,11 @@ class TimelineEditor {
           const oldVal = w.value;
           w.value = val;
           if (originNode.onWidgetChanged) {
-            originNode.onWidgetChanged(w.name, val, oldVal, w);
+            try {
+              originNode.onWidgetChanged(w.name, val, oldVal, w);
+            } catch (err) {
+              console.error("[LTXDirector] onWidgetChanged hook failed for", w.name, err);
+            }
           }
           if (w.callback) {
             try {
@@ -5911,7 +5915,11 @@ class TimelineEditor {
         const oldVal = w.value;
         w.value = val;
         if (this.node.onWidgetChanged) {
-          this.node.onWidgetChanged(w.name, val, oldVal, w);
+          try {
+            this.node.onWidgetChanged(w.name, val, oldVal, w);
+          } catch (err) {
+            console.error("[LTXDirector] onWidgetChanged hook failed for", w.name, err);
+          }
         }
         if (w.callback) {
           try {
@@ -9488,7 +9496,14 @@ class TimelineEditor {
           this.node.properties[w.name] = val;
         }
         if (this.node.onWidgetChanged) {
-          this.node.onWidgetChanged(w.name, val, oldVal, w);
+          // External hook (ComfyUI core / other extensions). A throw here used to
+          // abort commitChanges between two widget writes and save a timeline whose
+          // hidden fields contradict each other — contain it and log the culprit.
+          try {
+            this.node.onWidgetChanged(w.name, val, oldVal, w);
+          } catch (e) {
+            console.error("[LTXDirector] onWidgetChanged hook failed for", w.name, e);
+          }
         }
       }
       if (w.callback) {
@@ -9500,8 +9515,31 @@ class TimelineEditor {
       }
     };
 
+    // The four hidden fields below describe ONE timeline snapshot and must land
+    // together: compute every derived value first, then write them back-to-back
+    // with nothing in between that could throw and leave them contradicting.
+    let guideStrengthVal = "";
+    if (this.retakeMode) {
+      guideStrengthVal = imgStrengths.join(",");
+    } else {
+      const strList = sortedSegments
+        .filter(s => s.type !== "text")
+        .filter(s => s.start + s.length > startFrames && s.start < endFrames)
+        .map(s => (s.guideStrength !== undefined ? s.guideStrength : 1.0).toFixed(2));
+      guideStrengthVal = strList.join(",");
+    }
+
     if (this.timelineDataWidget) {
       updateWidgetValue(this.timelineDataWidget, jsonStr);
+    }
+    if (this.localPromptsWidget) {
+      updateWidgetValue(this.localPromptsWidget, contiguousPrompts.join(" | "));
+    }
+    if (this.segmentLengthsWidget) {
+      updateWidgetValue(this.segmentLengthsWidget, contiguousLengths.join(","));
+    }
+    if (this.guideStrengthWidget) {
+      updateWidgetValue(this.guideStrengthWidget, guideStrengthVal);
     }
 
     if (this.node.properties) {
@@ -9526,27 +9564,6 @@ class TimelineEditor {
     const overrideWidget = this.node.widgets?.find(w => w.name === "override_audio");
     if (overrideWidget) {
       updateWidgetValue(overrideWidget, !!this.node.properties.overrideAudio);
-    }
-
-    if (this.localPromptsWidget) {
-      updateWidgetValue(this.localPromptsWidget, contiguousPrompts.join(" | "));
-    }
-    if (this.segmentLengthsWidget) {
-      updateWidgetValue(this.segmentLengthsWidget, contiguousLengths.join(","));
-    }
-
-    if (this.guideStrengthWidget) {
-      let val = "";
-      if (this.retakeMode) {
-        val = imgStrengths.join(",");
-      } else {
-        const strList = sortedSegments
-          .filter(s => s.type !== "text")
-          .filter(s => s.start + s.length > startFrames && s.start < endFrames)
-          .map(s => (s.guideStrength !== undefined ? s.guideStrength : 1.0).toFixed(2));
-        val = strList.join(",");
-      }
-      updateWidgetValue(this.guideStrengthWidget, val);
     }
 
     // Keep zoom slider max in sync with the current timeline duration.
