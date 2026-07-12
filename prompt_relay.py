@@ -5,10 +5,23 @@ import torch
 log = logging.getLogger(__name__)
 
 
-def build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, tokens_per_frame):
-    """Gaussian penalty matrix [Lq, Lk] for video cross-attention (integer frame indexing)."""
+def build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, tokens_per_frame, guide_token_frames=None):
+    """Gaussian penalty matrix [Lq, Lk] for video cross-attention (integer frame indexing).
+
+    guide_token_frames (optional): the true timeline frame of each appended guide token,
+    in sequence order — LTXDirectorGuide's map. In-band tokens keep the exact integer
+    mapping and guide tokens (MSR references, image keyframes, motion guides) are
+    windowed at the frames they are anchored to, like any other token of that frame.
+    """
     offset = torch.zeros(Lq, Lk, device=device, dtype=dtype)
-    query_frames = torch.arange(Lq, device=device, dtype=torch.long) // tokens_per_frame
+    if guide_token_frames:
+        n_guide = len(guide_token_frames)
+        query_frames = torch.cat([
+            torch.arange(Lq - n_guide, device=device, dtype=torch.long) // tokens_per_frame,
+            torch.as_tensor(guide_token_frames, device=device, dtype=torch.long),
+        ])
+    else:
+        query_frames = torch.arange(Lq, device=device, dtype=torch.long) // tokens_per_frame
 
     for seg in q_token_idx:
         local = seg["local_token_idx"].to(device=device)
@@ -72,9 +85,33 @@ def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
         attn_type = transformer_options.get("promptrelay_attn_type", "attn2")
         is_audio = (attn_type == "audio_attn2")
 
+        gmap = None if is_audio else transformer_options.get("promptrelay_guide_token_frames", None)
         if is_audio:
             mode = "scaled"
             video_lq = -1
+        elif gmap:
+            # LTXDirectorGuide's guide-token frame map: Lq = in-band timeline tokens plus
+            # one entry per surviving appended guide token. In-band tokens get the exact
+            # integer frame mapping and guide tokens their true anchor frames — appended
+            # guides must never push video attention onto the smeared scaled path.
+            n_guide = len(gmap)
+            inband_lq = Lq - n_guide
+            if inband_lq <= 0 or inband_lq % latent_frames != 0:
+                raise ValueError(
+                    f"[PromptRelay] guide token map ({n_guide} tokens) is inconsistent with "
+                    f"Lq={Lq} and latent_frames={latent_frames} (in-band {inband_lq}). "
+                    f"The Guide's injections and its map must describe the same run — "
+                    f"something else appended latent frames after LTXDirectorGuide."
+                )
+            video_tpf = inband_lq // latent_frames
+            video_lq = inband_lq
+
+            # Skip cross-modal attention — text keys are padded to a fixed length ≥ max_token_idx and != video_lq
+            if Lk == video_lq or Lk < max_token_idx:
+                debug_log(f"mask_fn: Lk == video_lq ({Lk == video_lq}) or Lk < max_token_idx ({Lk < max_token_idx}), returning None")
+                return None
+
+            mode = "video_guided"
         else:
             if grid_sizes is not None:
                 video_tpf = int(grid_sizes[1]) * int(grid_sizes[2])
@@ -92,10 +129,12 @@ def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
 
             mode = "video" if Lq == video_lq else "scaled"
 
-        key = (Lq, Lk, mode, device)
+        key = (Lq, Lk, mode, device, transformer_options.get("promptrelay_guide_token_frames_key"))
         if key not in cache:
             if mode == "video":
                 cost = build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, video_tpf)
+            elif mode == "video_guided":
+                cost = build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, video_tpf, guide_token_frames=gmap)
             else:
                 cost = build_temporal_cost_scaled(q_token_idx, Lq, Lk, device, dtype, latent_frames, is_audio=is_audio)
             log.info(

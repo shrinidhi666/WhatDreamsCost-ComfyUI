@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import time
 import av
 import numpy as np
 import torch
@@ -28,6 +29,28 @@ def _set_guide_attention_entries(conditioning, entries):
     return node_helpers.conditioning_set_values(
         conditioning, {"guide_attention_entries": entries}
     )
+
+def _track_guide_tokens(acc, guide_latent, guide_mask, strength, anchor_latent_idx):
+    """Record the target latent frame of every appended guide token that will survive
+    the model's grid filter, in patchify order (frame-major, H*W tokens per frame).
+
+    _process_input drops tokens whose denoise-mask value is negative; append_keyframe
+    writes (guide_mask - strength) when a mask is given and max(0, 1 - strength)
+    otherwise — so survival is exactly (guide_mask - strength) >= 0, and maskless
+    guides always survive whole. One acc entry per surviving token, so the prompt
+    relay can give each guide token its TRUE timeline frame instead of smearing the
+    whole sequence through the audio-style scaled mapping.
+    """
+    _, _, F_g, H_g, W_g = guide_latent.shape
+    if guide_mask is None:
+        for f in range(F_g):
+            acc.extend([anchor_latent_idx + f] * (H_g * W_g))
+        return
+    keep = (guide_mask.float() - float(strength) >= 0)[0, 0]
+    if keep.shape != (F_g, H_g, W_g):
+        keep = keep.expand(F_g, H_g, W_g)
+    for f in range(F_g):
+        acc.extend([anchor_latent_idx + f] * int(keep[f].sum().item()))
 
 def _append_guide_attention_entry(
     conditioning,
@@ -587,6 +610,11 @@ class LTXDirectorGuide:
             target_pix_w = int(latent_width * 32)
             target_pix_h = int(latent_height * 32)
 
+            # One entry per surviving appended guide token (patchify order, append order):
+            # its true timeline latent frame. Handed to the prompt relay so local prompts
+            # window over guide tokens at their real positions — never a smeared mapping.
+            guide_token_frames = []
+
             # A0. MSR reference clip — composed subjects + background, injected at frame 0 with
             # strength 1.0 and the MSR LoRA's own downscale factor, matching the official
             # Licon-MSR sample (LTXAddVideoICLoRAGuide frame_idx=0, strength=1, factor=1).
@@ -622,6 +650,7 @@ class LTXDirectorGuide:
                 if is_lora_active:
                     positive = _append_guide_attention_entry(positive, tokens_added, msr_guide_shape, attention_strength=msr_attention_strength)
                     negative = _append_guide_attention_entry(negative, tokens_added, msr_guide_shape, attention_strength=msr_attention_strength)
+                _track_guide_tokens(guide_token_frames, msr_guide_latent, msr_guide_mask, 1.0, 0)
                 print(f"[LTXDirectorGuide] MSR guide injected: {len(msr_subjects)} subject(s) + background, {int(msr_frame_count)} frames -> latent {msr_guide_shape} at frame 0.")
 
             # A. Process Image Guides — images arrive RAW from the Director. Resize them to
@@ -676,6 +705,7 @@ class LTXDirectorGuide:
                     # per-segment videoAttentionStrength.
                     positive = _append_guide_attention_entry(positive, tokens_added, guide_orig_shape, attention_strength=image_attention_strength * strength)
                     negative = _append_guide_attention_entry(negative, tokens_added, guide_orig_shape, attention_strength=image_attention_strength * strength)
+                _track_guide_tokens(guide_token_frames, guide_latent, None, strength, latent_idx)
 
             # B. Process Motion Video Segments
             for seg in segments:
@@ -748,11 +778,25 @@ class LTXDirectorGuide:
                     if is_lora_active:
                         positive = _append_guide_attention_entry(positive, tokens_added, guide_orig_shape, attention_strength=video_attention_strength)
                         negative = _append_guide_attention_entry(negative, tokens_added, guide_orig_shape, attention_strength=video_attention_strength)
+                    _track_guide_tokens(guide_token_frames, guide_latent, guide_mask, video_strength, latent_idx)
                 except Exception as e:
                     raise RuntimeError(f"LTX Director Guide motion segment failed for {seg}: {e}") from e
 
         else:
             print("[LTXDirectorGuide] No timeline guides present. Passing through.")
+
+        # Hand the relay the frame map: with it, local prompts window over appended guide
+        # tokens (MSR refs, keyframes, motion) at their TRUE timeline frames and in-band
+        # tokens keep exact integer mapping. Without it (Keyframer & friends), the relay
+        # keeps its legacy shape heuristics. Clone before attaching — `model` may still
+        # be the caller's object when no LoRA was applied.
+        if model is not None and guide_token_frames:
+            model = model.clone()
+            t_opts = dict(model.model_options.get("transformer_options", {}))
+            t_opts["promptrelay_guide_token_frames"] = tuple(guide_token_frames)
+            t_opts["promptrelay_guide_token_frames_key"] = str(time.time_ns())
+            model.model_options["transformer_options"] = t_opts
+            print(f"[LTXDirectorGuide] Prompt-relay guide map attached: {len(guide_token_frames)} guide tokens.")
 
         exact_crop_frames = max(0, int(latent_image.shape[2]) - initial_latent_length)
         positive = node_helpers.conditioning_set_values(positive, {"nghtdrp_guide_crop_latent_frames": exact_crop_frames})
