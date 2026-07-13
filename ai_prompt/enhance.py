@@ -15,10 +15,13 @@ what the Director already writes.
 """
 
 import json
+import logging
 import os
 
 from . import ollama_client
 from . import prompt_builder
+
+log = logging.getLogger(__name__)
 
 # Main-track segment types that form story beats. "ghost" segments (visual filler) and
 # anything unknown are skipped -- they hold no story content.
@@ -261,6 +264,19 @@ def run(payload, input_dir):
     prompt, system, images, segments_out = build_request(payload, input_dir,
                                                          enumeration=enumeration,
                                                          global_only=global_only)
+
+    # The MSR enumeration-only shape (official V2 pattern): references present, real
+    # segments to carry the story, and NOT global-only. There the GLOBAL is the fixed
+    # enumeration alone and every beat carries the narration. When MSR references are
+    # present but global-only is on, the whole story is forced into the global instead
+    # (nowhere else to put it) -- functional, but NOT the trained pattern; flag it.
+    msr_enum_shape = bool(enumeration) and not global_only
+    if enumeration and global_only:
+        log.warning("[AI Prompt] MSR references with 'global only' writes the whole story into "
+                    "the global prompt. The official MSR pattern keeps the global to the "
+                    "enumeration and puts the story in timeline segments -- uncheck 'global only' "
+                    "and add text segments for the trained behavior.")
+
     raw = ollama_client.generate_vision(
         prompt, images, model,
         system=system or None,
@@ -271,9 +287,10 @@ def run(payload, input_dir):
         keep_alive=keep_alive,
     )
     n_expected = 0 if global_only else len(segments_out)
-    global_prompt, seg_prompts = prompt_builder.parse_sections(raw, n_expected)
+    global_prompt, seg_prompts = prompt_builder.parse_sections(
+        raw, n_expected, allow_empty_global=msr_enum_shape)
     if enumeration:
-        global_prompt = f"{enumeration} {global_prompt}"
+        global_prompt = f"{enumeration} {global_prompt}".strip()
     if global_only:
         segments_out = []
     for entry, text in zip(segments_out, seg_prompts):

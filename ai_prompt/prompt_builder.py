@@ -271,6 +271,13 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
         for note in audio_notes:
             lines.append(f"  {note}")
 
+    # When MSR references are in play AND real segments exist, follow the official MSR
+    # sample's prompt shape: the GLOBAL carries ONLY the fixed enumeration (the subjects
+    # and scene, described once), and ALL story lives in the SEGMENT sections. This is
+    # what the LoRA was trained on and what its own V2 guidance recommends (state each
+    # reference's role, then act). No enumeration = ordinary Director behavior.
+    msr_enum_shape = bool(enumeration) and not global_only
+
     if global_only:
         lines += [
             "",
@@ -278,6 +285,20 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
             "light, and the overall arc across all the beats above, in present tense, as one",
             "continuous shot (never a scene cut). Segment prompts are handled separately; you",
             "write ONLY the global.",
+        ]
+    elif msr_enum_shape:
+        lines += [
+            "",
+            "Your job: write the Director prompt set for this MSR clip. The GLOBAL is RESERVED for",
+            "the FIXED reference enumeration ALONE (it is prepended automatically) -- so write the",
+            "GLOBAL as an EMPTY line, or at most one short present-tense line naming the setting by",
+            "its enumerated look. Do NOT narrate the story, the action, or the arc in the GLOBAL.",
+            "ALL of the story goes into the SEGMENT prompts: one present-tense paragraph per beat",
+            "that narrates ONLY what happens inside that beat's window, flowing naturally out of the",
+            "previous beat and into the next (one continuous shot, never a scene cut). In every",
+            "segment, point at each referenced subject by a SHORT distinguishing handle drawn from",
+            "its enumerated look (e.g. 'the figure in the red scarf'), never a full re-description",
+            "and never a name -- the enumeration already carries the full identity.",
         ]
     else:
         lines += [
@@ -302,15 +323,26 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
 
     msr_block = ""
     if enumeration:
+        if msr_enum_shape:
+            bind_note = (
+                "Do NOT write or repeat the enumeration yourself, and do NOT add narration to the\n"
+                "GLOBAL -- the enumeration IS the global. Put all story in the SEGMENTS, and there\n"
+                "bind under rule 7: point at every referenced element by the EXACT look enumerated\n"
+                "above (never a name), so the reference tokens bind to your prompt entities.\n\n"
+            )
+        else:
+            bind_note = (
+                "Do NOT write or repeat the enumeration yourself -- write the GLOBAL as the NARRATION\n"
+                "that follows it. Narrate under rule 7: point at every referenced element by the\n"
+                "EXACT look enumerated above (never a name), so the reference tokens bind to your\n"
+                "prompt entities.\n\n"
+            )
         msr_block = (
             MSR_RULES + "\n\n"
             "The references were already READ in a separate pass. The enumeration for THIS clip\n"
             "is FIXED and will be placed at the START of the GLOBAL prompt AUTOMATICALLY:\n"
             f"  {enumeration}\n"
-            "Do NOT write or repeat the enumeration yourself -- write the GLOBAL as the NARRATION\n"
-            "that follows it. Narrate under rule 7: point at every referenced element by the\n"
-            "EXACT look enumerated above (never a name), so the reference tokens bind to your\n"
-            "prompt entities.\n\n"
+            + bind_note
         )
 
     # Axis blocks, in the CLI's exact order: motion core first, then MSR, then camera and
@@ -324,16 +356,21 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
     seg_labels = "" if global_only else (
         "\n".join(f"SEGMENT {i}: <present-tense paragraph for beat {i}'s window ONLY>"
                   for i in range(1, n_segments + 1)) + "\n")
+    if msr_enum_shape:
+        global_spec = ("GLOBAL: <leave empty, or at most one short line naming the setting by its"
+                       " enumerated look -- NO story here>\n")
+    elif enumeration:
+        global_spec = ("GLOBAL: <one flowing paragraph anchoring the whole clip -- the NARRATION"
+                       " that follows the fixed enumeration, never the enumeration itself>\n")
+    else:
+        global_spec = "GLOBAL: <one flowing paragraph anchoring the whole clip>\n"
     task = (
         "\n\nNOW WRITE THE DIRECTOR PROMPT"
         + ("" if global_only else "S")
         + ". Output ONLY "
         + ("this labeled section" if global_only else "these labeled sections")
         + ", each label at the start of its own line, exactly:\n"
-        "GLOBAL: <one flowing paragraph anchoring the whole clip"
-        + (" -- the NARRATION that follows the fixed enumeration, never the enumeration itself"
-           if enumeration else "")
-        + ">\n"
+        + global_spec
         + seg_labels
         + "No preamble, no JSON, no headings beyond "
         + ("that label" if global_only else "those labels")
@@ -352,11 +389,15 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
 _LABEL_RE = re.compile(r"^\s*(GLOBAL|SEGMENT\s+(\d+))\s*:\s*", re.IGNORECASE | re.MULTILINE)
 
 
-def parse_sections(text, n_segments):
+def parse_sections(text, n_segments, allow_empty_global=False):
     """Parse the model's labeled sections into (global_prompt, [segment_1..segment_n]).
     HARD error on any missing label -- the contract is the prompt's job to enforce, never a
     downstream scrub. Extra text before the first label (e.g. thinking remnants) is ignored.
-    (Vendored verbatim from director_ltx.parse_sections.)"""
+    (Vendored verbatim from director_ltx.parse_sections.)
+
+    allow_empty_global: in the MSR enumeration-only shape the GLOBAL is intentionally empty
+    (the caller prepends the fixed enumeration), so an empty GLOBAL body is valid there --
+    but the GLOBAL LABEL itself must still be present."""
     matches = list(_LABEL_RE.finditer(text or ""))
     if not matches:
         raise ValueError("Model output has no GLOBAL:/SEGMENT N: labels. Full output:\n" + str(text))
@@ -368,7 +409,9 @@ def parse_sections(text, n_segments):
         if key in found:
             raise ValueError(f"Model output repeats the {key} label.")
         found[key] = " ".join(body.split())
-    if "GLOBAL" not in found or not found["GLOBAL"]:
+    if "GLOBAL" not in found:
+        raise ValueError("Model output is missing the GLOBAL label.")
+    if not found["GLOBAL"] and not allow_empty_global:
         raise ValueError("Model output is missing a non-empty GLOBAL section.")
     segments = []
     for i in range(1, n_segments + 1):
