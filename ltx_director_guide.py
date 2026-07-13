@@ -802,6 +802,10 @@ class LTXDirectorGuide:
             model = model.clone()
             t_opts = dict(model.model_options.get("transformer_options", {}))
             t_opts["promptrelay_guide_token_frames"] = tuple(guide_token_frames)
+            # The video grid's tokens per frame — lets the relay identify the mapped
+            # stream EXACTLY (Lq == frames*tpf + guides) instead of guessing by shape;
+            # audio tokens share the attn2 rail and must never match.
+            t_opts["promptrelay_guide_tpf"] = int(latent_image.shape[3] * latent_image.shape[4])
             t_opts["promptrelay_guide_token_frames_key"] = str(time.time_ns())
             model.model_options["transformer_options"] = t_opts
             print(f"[LTXDirectorGuide] Prompt-relay guide map attached: {len(guide_token_frames)} guide tokens.")

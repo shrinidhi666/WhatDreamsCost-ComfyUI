@@ -67,6 +67,7 @@ def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
     wrap an existing cross-attn forward (e.g. KJNodes NAG) instead of replacing it.
     """
     cache = {}
+    _warned = set()
     max_token_idx = max(int(seg["local_token_idx"].max().item()) for seg in q_token_idx) + 1
 
     def mask_fn(Lq, Lk, dtype, device, transformer_options):
@@ -86,25 +87,38 @@ def create_mask_fn(q_token_idx, fallback_tokens_per_frame, latent_frames):
         is_audio = (attn_type == "audio_attn2")
 
         gmap = None if is_audio else transformer_options.get("promptrelay_guide_token_frames", None)
+        gtpf = transformer_options.get("promptrelay_guide_tpf", None)
+        if gmap:
+            # LTXDirectorGuide's map describes exactly ONE stream: the video tokens —
+            # latent_frames x tpf in-band tokens plus one entry per surviving appended
+            # guide token, with tpf published by the Guide itself. The stream is matched
+            # EXACTLY by that arithmetic; anything else on the attn2 rail (LTXAV audio
+            # tokens at ~8 per frame) keeps the legacy handling. A stream LARGER than
+            # expected is the only signature a genuine mismatch can leave (audio never
+            # out-counts video), so it downgrades to legacy with a warning, never a
+            # mid-sampling crash.
+            expected_lq = (latent_frames * gtpf + len(gmap)) if gtpf else -1
+            if Lq != expected_lq:
+                if expected_lq > 0 and Lq > expected_lq:
+                    warn_key = (Lq, expected_lq)
+                    if warn_key not in _warned:
+                        _warned.add(warn_key)
+                        log.warning(
+                            "[PromptRelay] guide token map expected Lq=%d "
+                            "(latent_frames=%d x tpf=%d + %d guide tokens) but saw Lq=%d — "
+                            "something appended latent frames after LTXDirectorGuide; "
+                            "stream handled by legacy shape rules.",
+                            expected_lq, latent_frames, gtpf, len(gmap), Lq)
+                gmap = None
         if is_audio:
             mode = "scaled"
             video_lq = -1
         elif gmap:
-            # LTXDirectorGuide's guide-token frame map: Lq = in-band timeline tokens plus
-            # one entry per surviving appended guide token. In-band tokens get the exact
-            # integer frame mapping and guide tokens their true anchor frames — appended
-            # guides must never push video attention onto the smeared scaled path.
-            n_guide = len(gmap)
-            inband_lq = Lq - n_guide
-            if inband_lq <= 0 or inband_lq % latent_frames != 0:
-                raise ValueError(
-                    f"[PromptRelay] guide token map ({n_guide} tokens) is inconsistent with "
-                    f"Lq={Lq} and latent_frames={latent_frames} (in-band {inband_lq}). "
-                    f"The Guide's injections and its map must describe the same run — "
-                    f"something else appended latent frames after LTXDirectorGuide."
-                )
-            video_tpf = inband_lq // latent_frames
-            video_lq = inband_lq
+            # In-band tokens get the exact integer frame mapping and guide tokens their
+            # true anchor frames — appended guides must never push video attention onto
+            # the smeared scaled path.
+            video_tpf = gtpf
+            video_lq = latent_frames * gtpf
 
             # Skip cross-modal attention — text keys are padded to a fixed length ≥ max_token_idx and != video_lq
             if Lk == video_lq or Lk < max_token_idx:
