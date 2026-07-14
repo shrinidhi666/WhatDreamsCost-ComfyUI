@@ -30,7 +30,12 @@ def _set_guide_attention_entries(conditioning, entries):
         conditioning, {"guide_attention_entries": entries}
     )
 
-def _track_guide_tokens(acc, guide_latent, guide_mask, strength, anchor_latent_idx):
+# Sentinel frame for a GLOBAL guide token (an identity reference, not a temporal frame):
+# the relay must let EVERY beat attend to it freely, never penalize it by distance from a
+# beat's window. MSR references are global; image keyframes and motion guides are temporal.
+GLOBAL_REF_FRAME = -1
+
+def _track_guide_tokens(acc, guide_latent, guide_mask, strength, anchor_latent_idx, global_ref=False):
     """Record the target latent frame of every appended guide token that will survive
     the model's grid filter, in patchify order (frame-major, H*W tokens per frame).
 
@@ -38,19 +43,26 @@ def _track_guide_tokens(acc, guide_latent, guide_mask, strength, anchor_latent_i
     writes (guide_mask - strength) when a mask is given and max(0, 1 - strength)
     otherwise — so survival is exactly (guide_mask - strength) >= 0, and maskless
     guides always survive whole. One acc entry per surviving token, so the prompt
-    relay can give each guide token its TRUE timeline frame instead of smearing the
-    whole sequence through the audio-style scaled mapping.
+    relay can window each guide token correctly.
+
+    global_ref=True marks EVERY token from this guide as a global identity reference
+    (MSR): they are recorded as GLOBAL_REF_FRAME so the relay exempts them from the
+    temporal penalty — every beat attends to the reference equally, so identity grounds
+    the WHOLE clip instead of only the frames near the reference's injection point.
+    Frame-anchored guides (image keyframes, motion) record their true latent frame.
     """
     _, _, F_g, H_g, W_g = guide_latent.shape
+    def frame_of(f):
+        return GLOBAL_REF_FRAME if global_ref else (anchor_latent_idx + f)
     if guide_mask is None:
         for f in range(F_g):
-            acc.extend([anchor_latent_idx + f] * (H_g * W_g))
+            acc.extend([frame_of(f)] * (H_g * W_g))
         return
     keep = (guide_mask.float() - float(strength) >= 0)[0, 0]
     if keep.shape != (F_g, H_g, W_g):
         keep = keep.expand(F_g, H_g, W_g)
     for f in range(F_g):
-        acc.extend([anchor_latent_idx + f] * int(keep[f].sum().item()))
+        acc.extend([frame_of(f)] * int(keep[f].sum().item()))
 
 def _append_guide_attention_entry(
     conditioning,
@@ -658,8 +670,8 @@ class LTXDirectorGuide:
                 if is_lora_active:
                     positive = _append_guide_attention_entry(positive, tokens_added, msr_guide_shape, attention_strength=msr_attention_strength)
                     negative = _append_guide_attention_entry(negative, tokens_added, msr_guide_shape, attention_strength=msr_attention_strength)
-                _track_guide_tokens(guide_token_frames, msr_guide_latent, msr_guide_mask, 1.0, 0)
-                print(f"[LTXDirectorGuide] MSR guide injected: {len(msr_subjects)} subject(s) + background, {int(msr_frame_count)} frames -> latent {msr_guide_shape} at frame 0.")
+                _track_guide_tokens(guide_token_frames, msr_guide_latent, msr_guide_mask, 1.0, 0, global_ref=True)
+                print(f"[LTXDirectorGuide] MSR guide injected: {len(msr_subjects)} subject(s) + background, {int(msr_frame_count)} frames -> latent {msr_guide_shape} at frame 0 (global reference, all beats attend).")
 
             # A. Process Image Guides — images arrive RAW from the Director. Resize them to
             # THIS stage's resolution and compress here (the only place compression happens).

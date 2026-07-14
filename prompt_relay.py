@@ -14,12 +14,21 @@ def build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, tokens_per_frame, gu
     windowed at the frames they are anchored to, like any other token of that frame.
     """
     offset = torch.zeros(Lq, Lk, device=device, dtype=dtype)
+    global_ref_row = None
     if guide_token_frames:
         n_guide = len(guide_token_frames)
+        gframes = torch.as_tensor(guide_token_frames, device=device, dtype=torch.long)
         query_frames = torch.cat([
             torch.arange(Lq - n_guide, device=device, dtype=torch.long) // tokens_per_frame,
-            torch.as_tensor(guide_token_frames, device=device, dtype=torch.long),
+            gframes,
         ])
+        # Global identity references (MSR) are recorded as GLOBAL_REF_FRAME (-1): they carry
+        # no temporal position, so they must never be penalized by distance from a beat's
+        # window — every beat attends to them equally, grounding identity across the WHOLE
+        # clip. Without this exemption the Gaussian penalty blocks references from the beats
+        # farthest from the injection frame, and identity/detail decays over the clip.
+        global_ref_row = torch.zeros(Lq, dtype=torch.bool, device=device)
+        global_ref_row[Lq - n_guide:] = (gframes < 0)
     else:
         query_frames = torch.arange(Lq, device=device, dtype=torch.long) // tokens_per_frame
 
@@ -28,6 +37,9 @@ def build_temporal_cost(q_token_idx, Lq, Lk, device, dtype, tokens_per_frame, gu
         d = (query_frames.float()[:, None] - seg["midpoint"]).abs()
         strength = seg.get("strength", 1.0)
         cost = strength * (torch.relu(d - seg["window"]) ** 2) / (2 * seg["sigma"] ** 2)
+        if global_ref_row is not None:
+            cost = cost.clone()
+            cost[global_ref_row] = 0.0  # references: free to be attended by every beat
         offset[:, local] = cost.to(offset.dtype)
 
     return offset
