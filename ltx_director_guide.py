@@ -204,18 +204,76 @@ def _dilate_latent(latent: dict, horizontal_scale: int, vertical_scale: int) -> 
     return {"samples": dilated_samples, "noise_mask": dilated_mask}
 
 # --- MSR (Multi-Subject Reference) compositor ---
-# Ported from ComfyUI-Licon-MSR (LiconMSR.create_video) so the Director has no hard dependency
-# on that pack. Reference behavior preserved: each still is stretch-fitted to the target size
-# (LiconMSR uses cv2 LANCZOS4; _resize_image's lanczos matches) and the frame budget is split
-# evenly across subjects + background, remainder distributed from the front.
+# Ported from ComfyUI-Licon-MSR (LiconMSR.create_video, upstream commits c9a34ef "Update LTX
+# frame allocation and image scaling" + f4543cb) so the Director has no hard dependency on that
+# pack. Frame allocation is LATENT-BLOCK AWARE: each reference is placed on WHOLE 8-frame latent
+# blocks so neighbouring references never share a latent frame (the video VAE compresses time
+# 8:1 -- a misaligned split blends two references into one latent frame and smears the identity).
+# The naive frame_count // len split (previous version) put e.g. 5 refs at 9/8/8/8/8, straddling
+# block boundaries; this replaces it with upstream's exact allocation.
 
-def _expand_msr_frames(images, frame_count):
-    base_count = frame_count // len(images)
-    remainder = frame_count % len(images)
-    frames = []
-    for index, image in enumerate(images):
-        repeats = base_count + (1 if index < remainder else 0)
-        frames.extend([image] * repeats)
+MSR_FRAME_COUNTS = (17, 25, 33, 41, 49, 57, 65)  # 8 * refs + 1, for 2..8 total references
+
+def _msr_estimate_ref_latent_frames(source_frame_count):
+    if source_frame_count <= 1:
+        return max(1, source_frame_count)
+    return int(round((source_frame_count - 1) / 8.0)) + 1
+
+def _msr_latent_to_frame_range(latent_start, latent_end):
+    latent_start = int(latent_start)
+    latent_end = int(latent_end)
+    frame_start = 0 if latent_start <= 0 else 1 + (latent_start - 1) * 8
+    frame_end = 0 if latent_end <= 0 else latent_end * 8
+    return frame_start, frame_end
+
+def _msr_allocate_subject_latent_counts(num_subjects, subject_budget):
+    counts = [1] * num_subjects
+    extra = max(0, int(subject_budget) - num_subjects)
+    if extra > 0:
+        counts[0] += 1
+        extra -= 1
+    index = 1
+    while extra > 0 and num_subjects > 1 and any(count < 2 for count in counts[1:]):
+        if counts[index] < 2:
+            counts[index] += 1
+            extra -= 1
+        index = index + 1 if index + 1 < num_subjects else 1
+    if extra > 0 and counts[0] < 3:
+        counts[0] += 1
+        extra -= 1
+    index = 0
+    while extra > 0:
+        counts[index] += 1
+        extra -= 1
+        index = (index + 1) % num_subjects
+    return counts
+
+def _expand_msr_frames(subjects, background, frame_count):
+    """Latent-block-aware placement (upstream _expand_frames). subjects/background are single
+    prepared frame tensors [H,W,3]. Returns a list of `frame_count` frame tensors where each
+    subject fills whole latent blocks and the background fills the rest."""
+    latent_count = _msr_estimate_ref_latent_frames(frame_count)
+    frames = [background] * frame_count
+    if not subjects:
+        return frames
+    subject_budget = max(0, latent_count - 1)
+    if subject_budget >= len(subjects):
+        counts = _msr_allocate_subject_latent_counts(len(subjects), subject_budget)
+        cursor = 0
+        for image, count in zip(subjects, counts):
+            start, end = _msr_latent_to_frame_range(cursor, cursor + count - 1)
+            cursor += count
+            for frame_index in range(max(0, start), min(frame_count - 1, end) + 1):
+                frames[frame_index] = image
+    else:
+        subject_frame_count = max(1, _msr_latent_to_frame_range(0, max(0, latent_count - 2))[1] + 1)
+        for index, image in enumerate(subjects):
+            start = int(index * subject_frame_count / len(subjects))
+            end = int((index + 1) * subject_frame_count / len(subjects)) - 1
+            if index == len(subjects) - 1:
+                end = subject_frame_count - 1
+            for frame_index in range(start, min(frame_count - 1, max(start, end)) + 1):
+                frames[frame_index] = image
     return frames
 
 def _load_msr_panel_image(image_file):
@@ -238,32 +296,49 @@ def _load_msr_panel(tdata, default_frame_count):
         return [], None, default_frame_count
     if not subject_files or not background_file:
         raise ValueError("[LTXDirectorGuide] MSR panel: at least one subject AND a background are required.")
-    subjects = [_load_msr_panel_image(f) for f in subject_files[:4]]
+    subjects = [_load_msr_panel_image(f) for f in subject_files[:7]]  # up to 7 subjects + 1 bg = 8 refs
     background = _load_msr_panel_image(background_file)
     try:
         frame_count = int(panel.get("frameCount", default_frame_count) or default_frame_count)
     except (TypeError, ValueError):
         frame_count = default_frame_count
-    if frame_count not in (17, 25, 33, 41):
+    if frame_count not in MSR_FRAME_COUNTS:
         frame_count = default_frame_count
     return subjects, background, frame_count
 
-def _build_msr_guide(subjects, background, width, height, frame_count, resize_method="stretch to fit"):
-    """Compose the MSR reference clip: 1-4 subject stills + a background still, each resized to
-    width x height, expanded to frame_count frames. Returns [frame_count, H, W, 3] float32.
-    `resize_method` fits each reference to the target: "stretch to fit" is LiconMSR's own
-    behavior (cv2.resize -- distorts on aspect mismatch); "crop" center-crops to fill (no
-    distortion, matches the official sample's crop=center); "pad"/"pad green" letterbox.
-    Every method yields exactly width x height so the frames stack."""
-    if resize_method == "maintain aspect ratio":
-        resize_method = "pad"  # must end exactly WxH to stack; no-pad fitting cannot
-    prepared = []
-    for img in [*subjects, background]:
+def _msr_fit_subject(t, width, height):
+    """Subject fit (upstream preserve_full=True): scale proportionally to fit inside WxH and
+    center on a WHITE canvas -- NEVER cropped, so no part of a subject reference is lost."""
+    _, sh, sw, _ = t.shape
+    scale = min(width / sw, height / sh)
+    rw = max(1, min(width, round(sw * scale)))
+    rh = max(1, min(height, round(sh * scale)))
+    resized = _resize_image(t, rw, rh, "stretch to fit", 1, "lanczos")[0]  # exact rw x rh
+    canvas = torch.ones((height, width, 3), dtype=resized.dtype, device=resized.device)  # white
+    left = (width - rw) // 2
+    top = (height - rh) // 2
+    canvas[top:top + rh, left:left + rw] = resized
+    return canvas
+
+def _msr_fit_background(t, width, height):
+    """Background fit (upstream preserve_full=False): cover-fit then center-crop to exactly WxH."""
+    return _resize_image(t, width, height, "crop", 1, "lanczos")[0]
+
+def _build_msr_guide(subjects, background, width, height, frame_count, resize_method="crop"):
+    """Compose the MSR reference clip: subject stills fitted-on-white (never cropped) + a
+    background still cover-cropped, placed on whole latent blocks (upstream allocation).
+    Returns [frame_count, H, W, 3] float32. `resize_method` is retained for signature
+    compatibility but subjects now always preserve-full and the background always cover-crops,
+    matching the upstream Licon-MSR compositor (no detail-losing stretch/crop on subjects)."""
+    prepared_subjects = []
+    for img in subjects:
         t = img[:1] if img.ndim == 4 else img.unsqueeze(0)
         t = t[..., :3].float()
-        t = _resize_image(t, width, height, resize_method, 1, "lanczos")
-        prepared.append(t[0])
-    frames = _expand_msr_frames(prepared, int(frame_count))
+        prepared_subjects.append(_msr_fit_subject(t, width, height))
+    bt = background[:1] if background.ndim == 4 else background.unsqueeze(0)
+    bt = bt[..., :3].float()
+    prepared_bg = _msr_fit_background(bt, width, height)
+    frames = _expand_msr_frames(prepared_subjects, prepared_bg, int(frame_count))
     return torch.stack(frames, dim=0)
 
 def _resolve_input_video_path(video_file):
