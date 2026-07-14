@@ -702,10 +702,10 @@ function parseInitial(jsonStr) {
         const fc = parseInt(p.msr.frameCount, 10);
         parsed.msr = {
           subjects: Array.isArray(p.msr.subjects)
-            ? p.msr.subjects.slice(0, 4).map(s => (typeof s === "string" ? s : ""))
-            : ["", "", "", ""],
+            ? p.msr.subjects.slice(0, 7).map(s => (typeof s === "string" ? s : ""))
+            : ["", "", "", "", "", "", ""],
           background: typeof p.msr.background === "string" ? p.msr.background : "",
-          frameCount: [17, 25, 33, 41].includes(fc) ? fc : 17,
+          frameCount: [17, 25, 33, 41, 49, 57, 65].includes(fc) ? fc : 17,
         };
       }
       if (p.aiPrompt && typeof p.aiPrompt === "object") {
@@ -3988,10 +3988,10 @@ class TimelineEditor {
 
   _ensureMsr() {
     if (!this.timeline.msr) {
-      this.timeline.msr = { subjects: ["", "", "", ""], background: "", frameCount: 17 };
+      this.timeline.msr = { subjects: ["", "", "", "", "", "", ""], background: "", frameCount: 17 };
     }
-    if (!Array.isArray(this.timeline.msr.subjects)) this.timeline.msr.subjects = ["", "", "", ""];
-    while (this.timeline.msr.subjects.length < 4) this.timeline.msr.subjects.push("");
+    if (!Array.isArray(this.timeline.msr.subjects)) this.timeline.msr.subjects = ["", "", "", "", "", "", ""];
+    while (this.timeline.msr.subjects.length < 7) this.timeline.msr.subjects.push("");
     return this.timeline.msr;
   }
 
@@ -4010,7 +4010,7 @@ class TimelineEditor {
     const m = this._ensureMsr();
     const refs = (m.subjects || []).filter(s => s).length + (m.background ? 1 : 0);
     const auto = 8 * refs + 1;
-    if ([17, 25, 33, 41].includes(auto)) {
+    if ([17, 25, 33, 41, 49, 57, 65].includes(auto)) {
       m.frameCount = auto;
     }
   }
@@ -4117,7 +4117,7 @@ class TimelineEditor {
       this._msrSlots[slotKey] = { slot, cap, clear };
       panel.appendChild(slot);
     };
-    for (let i = 0; i < 4; i++) mkSlot(i, `Subj ${i + 1}`);
+    for (let i = 0; i < 7; i++) mkSlot(i, `Subj ${i + 1}`);
     mkSlot("background", "BG");
 
     const fcLabel = document.createElement("div");
@@ -4126,9 +4126,9 @@ class TimelineEditor {
     panel.appendChild(fcLabel);
 
     const fcSelect = document.createElement("select");
-    fcSelect.title = "Frames in the composed MSR reference clip. AUTO-SET to 8 x refs + 1 whenever you add/remove references (17 = 2 refs, 25 = 3, 33 = 4, 41 = 5) so each reference fills whole latent blocks — misaligned counts smear references into each other. Change it manually to override until the refs change again.";
+    fcSelect.title = "Frames in the composed MSR reference clip. AUTO-SET to 8 x refs + 1 whenever you add/remove references (17 = 2 refs, 25 = 3, 33 = 4, 41 = 5, 49 = 6, 57 = 7, 65 = 8) so each reference fills whole latent blocks — misaligned counts smear references into each other. Change it manually to override until the refs change again.";
     fcSelect.style.cssText = "background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;";
-    for (const v of [17, 25, 33, 41]) {
+    for (const v of [17, 25, 33, 41, 49, 57, 65]) {
       const opt = document.createElement("option");
       opt.value = String(v);
       opt.textContent = String(v);
@@ -4169,7 +4169,7 @@ class TimelineEditor {
       }
     }
     if (this._msrFrameCountSelect) {
-      this._msrFrameCountSelect.value = String([17, 25, 33, 41].includes(parseInt(m.frameCount, 10)) ? parseInt(m.frameCount, 10) : 17);
+      this._msrFrameCountSelect.value = String([17, 25, 33, 41, 49, 57, 65].includes(parseInt(m.frameCount, 10)) ? parseInt(m.frameCount, 10) : 17);
     }
   }
 
@@ -9458,7 +9458,7 @@ class TimelineEditor {
       normalStartFrame: this.timeline.normalStartFrame,
       normalDurationFrames: this.timeline.normalDurationFrames,
       msr: this._msrHasContent() ? {
-        subjects: (this.timeline.msr.subjects || []).slice(0, 4).map(s => s || ""),
+        subjects: (this.timeline.msr.subjects || []).slice(0, 7).map(s => s || ""),
         background: this.timeline.msr.background || "",
         frameCount: parseInt(this.timeline.msr.frameCount, 10) || 17,
       } : null,
