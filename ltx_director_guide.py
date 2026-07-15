@@ -212,7 +212,7 @@ def _dilate_latent(latent: dict, horizontal_scale: int, vertical_scale: int) -> 
 # The naive frame_count // len split (previous version) put e.g. 5 refs at 9/8/8/8/8, straddling
 # block boundaries; this replaces it with upstream's exact allocation.
 
-MSR_FRAME_COUNTS = (17, 25, 33, 41, 49, 57, 65)  # 8 * refs + 1, for 2..8 total references
+MSR_FRAME_COUNTS = (17, 25, 33, 41, 49, 57, 65)  # upstream LiconMSR frame counts (max 4 subjects + 1 bg)
 
 def _msr_estimate_ref_latent_frames(source_frame_count):
     if source_frame_count <= 1:
@@ -296,7 +296,7 @@ def _load_msr_panel(tdata, default_frame_count):
         return [], None, default_frame_count
     if not subject_files or not background_file:
         raise ValueError("[LTXDirectorGuide] MSR panel: at least one subject AND a background are required.")
-    subjects = [_load_msr_panel_image(f) for f in subject_files[:7]]  # up to 7 subjects + 1 bg = 8 refs
+    subjects = [_load_msr_panel_image(f) for f in subject_files[:4]]  # max 4 subjects (upstream node limit) + 1 bg
     background = _load_msr_panel_image(background_file)
     try:
         frame_count = int(panel.get("frameCount", default_frame_count) or default_frame_count)
