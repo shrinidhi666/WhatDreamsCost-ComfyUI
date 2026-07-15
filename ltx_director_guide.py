@@ -294,9 +294,9 @@ def _load_msr_panel(tdata, default_frame_count):
     background_file = panel.get("background") or ""
     if not subject_files and not background_file:
         return [], None, default_frame_count
-    if not subject_files or not background_file:
-        raise ValueError("[LTXDirectorGuide] MSR panel: at least one subject AND a background are required.")
-    subjects = [_load_msr_panel_image(f) for f in subject_files[:4]]  # max 4 subjects (upstream node limit) + 1 bg
+    if not background_file:
+        raise ValueError("[LTXDirectorGuide] MSR panel: a background reference is required.")
+    subjects = [_load_msr_panel_image(f) for f in subject_files[:4]]  # max 4 subjects (upstream node limit); subjects optional
     background = _load_msr_panel_image(background_file)
     try:
         frame_count = int(panel.get("frameCount", default_frame_count) or default_frame_count)
@@ -513,7 +513,7 @@ class LTXDirectorGuide:
 
         # MSR track: subjects + background + frame count come from the Director's MSR panel
         # (timeline_data.msr) — the single source for MSR references.
-        msr_subjects, msr_background, msr_frame_count = _load_msr_panel(tdata, 17)
+        msr_subjects, msr_background, msr_frame_count = _load_msr_panel(tdata, 41)
         msr_active = msr_background is not None and len(msr_subjects) > 0
         if msr_active and is_retake_active:
             log.warning("[LTXDirectorGuide] MSR inputs are ignored in Retake Mode.")

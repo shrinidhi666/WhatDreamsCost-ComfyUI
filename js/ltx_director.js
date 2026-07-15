@@ -705,7 +705,7 @@ function parseInitial(jsonStr) {
             ? p.msr.subjects.slice(0, 4).map(s => (typeof s === "string" ? s : ""))
             : ["", "", "", ""],
           background: typeof p.msr.background === "string" ? p.msr.background : "",
-          frameCount: [17, 25, 33, 41, 49, 57, 65].includes(fc) ? fc : 17,
+          frameCount: [17, 25, 33, 41, 49, 57, 65].includes(fc) ? fc : 41,
         };
       }
       if (p.aiPrompt && typeof p.aiPrompt === "object") {
@@ -3988,7 +3988,7 @@ class TimelineEditor {
 
   _ensureMsr() {
     if (!this.timeline.msr) {
-      this.timeline.msr = { subjects: ["", "", "", ""], background: "", frameCount: 17 };
+      this.timeline.msr = { subjects: ["", "", "", ""], background: "", frameCount: 41 };
     }
     if (!Array.isArray(this.timeline.msr.subjects)) this.timeline.msr.subjects = ["", "", "", ""];
     while (this.timeline.msr.subjects.length < 4) this.timeline.msr.subjects.push("");
@@ -4009,9 +4009,8 @@ class TimelineEditor {
   _msrAutoFrameCount() {
     const m = this._ensureMsr();
     const refs = (m.subjects || []).filter(s => s).length + (m.background ? 1 : 0);
-    const auto = 8 * refs + 1;
-    if ([17, 25, 33, 41, 49, 57, 65].includes(auto)) {
-      m.frameCount = auto;
+    if (refs > 0) {
+      m.frameCount = 41;  // upstream node default; used whenever any reference is present
     }
   }
 
@@ -4151,7 +4150,7 @@ class TimelineEditor {
 
   _refreshMsrPanel() {
     if (!this.msrPanel || !this._msrSlots) return;
-    const m = this.timeline.msr || { subjects: [], background: "", frameCount: 17 };
+    const m = this.timeline.msr || { subjects: [], background: "", frameCount: 41 };
     for (const slotKey of [0, 1, 2, 3, "background"]) {
       const s = this._msrSlots[slotKey];
       if (!s) continue;
@@ -9460,7 +9459,7 @@ class TimelineEditor {
       msr: this._msrHasContent() ? {
         subjects: (this.timeline.msr.subjects || []).slice(0, 4).map(s => s || ""),
         background: this.timeline.msr.background || "",
-        frameCount: parseInt(this.timeline.msr.frameCount, 10) || 17,
+        frameCount: parseInt(this.timeline.msr.frameCount, 10) || 41,
       } : null,
       aiPrompt: this._aiPromptHasContent() ? {
         hint: this.timeline.aiPrompt.hint || "",
