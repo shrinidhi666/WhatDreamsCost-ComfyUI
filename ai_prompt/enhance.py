@@ -72,8 +72,10 @@ def _beat_image_b64(seg, input_dir):
 def collect_msr_refs(payload, input_dir):
     """Resolve the MSR panel references (pass-1 inputs): returns (ref_images_b64, count)
     where the list is subjects in panel order followed by the background, or ([], 0) when
-    the panel is empty. Half-filled panels and missing files are HARD errors -- a silently
-    absent identity reference would generate a prompt that binds to nothing."""
+    the panel is empty. The BACKGROUND is the one required reference; subjects are OPTIONAL
+    (V2 contract: a background-only panel is a valid scene-only run). A background-less
+    panel and missing files are HARD errors -- a silently absent identity reference would
+    generate a prompt that binds to nothing."""
     try:
         tdata = json.loads(payload.get("timeline_data") or "{}")
     except json.JSONDecodeError as e:
@@ -83,8 +85,9 @@ def collect_msr_refs(payload, input_dir):
     background = msr.get("background") or ""
     if not subjects and not background:
         return [], 0
-    if not subjects or not background:
-        raise ValueError("MSR needs at least one subject AND a background on the panel.")
+    if not background:
+        raise ValueError("MSR needs a background (scene) reference on the panel; "
+                         "subjects are optional.")
     images = []
     for j, name in enumerate(subjects, start=1):
         path = resolve_input_file(name, input_dir)
@@ -98,7 +101,7 @@ def collect_msr_refs(payload, input_dir):
     return images, len(subjects)
 
 
-def build_request(payload, input_dir, enumeration="", global_only=False,
+def build_request(payload, input_dir, enumeration="", msr_subjects=0, global_only=False,
                   perception_data=None):
     """Turn the endpoint payload into the PASS-2 pieces:
     (vision_prompt, system, images_b64, segments_out). The images are the BEAT frames
@@ -258,7 +261,7 @@ def build_request(payload, input_dir, enumeration="", global_only=False,
     existing_global = " ".join((tdata.get("global_prompt") or "").split())
 
     prompt = prompt_builder.build_vision_prompt(
-        beats, enumeration=enumeration, audio_notes=audio_notes,
+        beats, enumeration=enumeration, msr_subjects=msr_subjects, audio_notes=audio_notes,
         motion=(payload.get("motion") or "free"),
         camera=(payload.get("camera") or "free"),
         audio=(payload.get("audio") or "full"),
@@ -342,7 +345,7 @@ def run(payload, input_dir):
 
     PASS 1 (perception): the reference images ALONE -> one clause per reference
     (SUBJECT j: / SCENE: labels, hard-parsed) -> format_enumeration() composes the
-    official "Reference image N:" opening. Low temperature, no thinking -- a faithful
+    official V2 "Image N:" global. Low temperature, no thinking -- a faithful
     description task, mirroring vector-lab's see().
 
     PASS 2 (writing): the beat frames ALONE + the enumeration as fixed text -> GLOBAL
@@ -380,7 +383,7 @@ def run(payload, input_dir):
 
     ref_images, msr_count = collect_msr_refs(payload, input_dir)
     enumeration = ""
-    if msr_count:
+    if ref_images:
         # ONE image per call: role-specific instruction, nothing else in the call to
         # confuse it with. Subjects in panel order, then the scene.
         def read_ref(image_b64, prompt, what):
@@ -420,6 +423,7 @@ def run(payload, input_dir):
     global_only = bool(payload.get("global_only"))
     prompt, system, images, segments_out = build_request(payload, input_dir,
                                                          enumeration=enumeration,
+                                                         msr_subjects=msr_count,
                                                          global_only=global_only,
                                                          perception_data=perception_data)
 
@@ -448,7 +452,7 @@ def run(payload, input_dir):
     global_prompt, seg_prompts = prompt_builder.parse_sections(
         raw, n_expected, allow_empty_global=msr_enum_shape)
     if enumeration:
-        global_prompt = f"{enumeration} {global_prompt}".strip()
+        global_prompt = f"{enumeration}\n{global_prompt}".strip()
     if global_only:
         segments_out = []
     for entry, text in zip(segments_out, seg_prompts):

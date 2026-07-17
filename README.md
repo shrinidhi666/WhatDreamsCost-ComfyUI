@@ -204,21 +204,24 @@ A Complete Timeline Editor For LTX 2.3. This is the sucessor of my previous node
 Lock the identity of up to **4 subjects + 1 background/scene** across the whole clip, using the official **Licon-MSR IC-LoRA** for LTX 2.3 — fully integrated into the Director, no extra nodes needed.
 
 **The LoRA (required):**
-- Download from Hugging Face: [LiconStudio/LTX-2.3-Multiple-Subject-Reference](https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference) — file `LTX-2.3-Licon-MSR-V1.safetensors`
+- Download from Hugging Face: [LiconStudio/LTX-2.3-Multiple-Subject-Reference](https://huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference) — file `LTX-2.3-Licon-MSR-V2.safetensors` (V2: better identity consistency, stability and scene logic; the official V2 sample workflow uses it)
 - Put it in `ComfyUI/models/loras/`
 - Credits: the LoRA and the official sample workflow are by [LiconStudio](https://github.com/liconstudio/ComfyUI-Licon-MSR)
 
 **How to use:**
 1. Click the **MSR** button in the Director's toolbar to open the MSR panel.
-2. Drop **1–4 subject** references and **exactly one background** reference onto the panel slots. A subject reference may itself be a multi-view sheet (the same character from several angles in ONE image) — that's the strongest identity signal.
+2. Drop **exactly one background** (scene) reference — the one required slot — and **0–4 subject** references onto the panel. A background-only panel is a valid scene-only run (locks just the location). A subject reference may itself be a multi-view sheet (the same character from several angles in ONE image) — that's the strongest identity signal.
 3. The reference **frame count** sets the length of the composed reference clip (`17, 25, 33, 41, 49, 57, 65` — matching the upstream Licon-MSR node; values are `8 x N + 1` to align to LTX's 8:1 temporal VAE). It is auto-set to `8 x refs + 1` on add/remove, but stays a manual override. **What a higher count buys you:** each reference is placed on whole latent blocks, and more frames give each subject MORE blocks = more reference presence = a stronger identity lock. For 4 subjects + background, `33` is the minimum (one clean latent block per reference); `65` gives every subject two blocks (double presence, firmest identity, at a heavier reference clip). Counts below `33` are for fewer subjects. Raise the count if identity drifts; lower it to save compute.
 4. On the **LTX Director Guide** node, select the LoRA in `msr_lora_name` (leave strength at `1.0` to start).
-5. Open your **global prompt** with the reference enumeration — one tight clause per reference, subjects first, scene last — then narrate the clip pointing at every referenced element by its enumerated look (never by a name):
+5. The **global prompt** is the reference enumeration and NOTHING else — one tight `Image N:` line per reference, subjects first, scene last (the official V2 convention). The narration lives in the timeline segments and refers to every referenced entity **by its token** (`Image N`) at every mention — staging, action, dialogue:
 
 ```
-Reference image 1: a tall woman with silver hair, a red leather jacket, black boots.
-Reference image 2 (scene): a rain-soaked neon alley at night.
-The woman with silver hair in the red leather jacket walks toward the camera ...
+Global prompt:
+Image 1: a tall woman with silver hair, a red leather jacket, black boots.
+Image 2: a rain soaked neon alley at night.
+
+Segment: Image 1 walks toward the camera through the alley, neon reflections
+sliding over the wet ground. The camera cuts to a close up of Image 1 ...
 ```
 
 **Guide node controls:**
@@ -230,7 +233,7 @@ The woman with silver hair in the red leather jacket walks toward the camera ...
 **Good to know:**
 - References can be **any aspect ratio**. With the default `crop` they are center-cropped to the video's aspect — keep each reference's identity carrier (face / subject) centered so the crop never trims it.
 - The composed reference guide is injected at frame 0 with strength 1.0 — the official sample workflow's placement.
-- MSR is fully **additive and composable**: it works alongside prompt relay, image keyframes (first/mid/last frames), custom + inpainted audio, and IC-LoRA motion videos. With no MSR references on the panel the node behaves exactly as before — the LoRA is only applied when the panel has a background + at least one subject.
+- MSR is fully **additive and composable**: it works alongside prompt relay, image keyframes (first/mid/last frames), custom + inpainted audio, and IC-LoRA motion videos. With no MSR references on the panel the node behaves exactly as before — the LoRA is only applied when the panel has a background (subjects optional).
 - MSR is disabled in Retake Mode.
 - From the official model card: identity typically locks within **2–3 seeds**, and high-motion scenes render smoother at **50 fps**.
 

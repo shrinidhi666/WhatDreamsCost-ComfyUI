@@ -4066,7 +4066,7 @@ class TimelineEditor {
 
     const label = document.createElement("div");
     label.textContent = "MSR refs";
-    label.title = "Multi-Subject Reference (Licon-MSR): identity references for the whole clip. Needs at least one subject AND a background, plus the MSR LoRA selected on the LTX Director Guide node.";
+    label.title = "Multi-Subject Reference (Licon-MSR): identity references for the whole clip. Needs a background (scene) reference; subjects are optional (up to 4). Select the MSR LoRA on the LTX Director Guide node.";
     label.style.cssText = "font-size:11px;color:#aaa;margin-right:4px;";
     panel.appendChild(label);
 

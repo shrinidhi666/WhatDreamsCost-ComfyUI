@@ -514,7 +514,10 @@ class LTXDirectorGuide:
         # MSR track: subjects + background + frame count come from the Director's MSR panel
         # (timeline_data.msr) — the single source for MSR references.
         msr_subjects, msr_background, msr_frame_count = _load_msr_panel(tdata, 41)
-        msr_active = msr_background is not None and len(msr_subjects) > 0
+        # V2 contract: the background is the ONE required reference; subjects are optional
+        # (a scene-only run locks just the location -- _expand_msr_frames handles zero
+        # subjects: every reference frame is the background).
+        msr_active = msr_background is not None
         if msr_active and is_retake_active:
             log.warning("[LTXDirectorGuide] MSR inputs are ignored in Retake Mode.")
             msr_active = False

@@ -12,7 +12,7 @@ COUNT images):
   - PASS 1 (references, when MSR refs exist): each reference is read in ITS OWN vision
     call -- one image, one role-specific instruction (subject vs scene), one clause back
     (clean_ref_clause, hard-errors on empty). format_enumeration() composes the official
-    "Reference image N:" enumeration from those clauses.
+    V2 "Image N:" enumeration (subjects first, scene last) from those clauses.
   - PASS 2 (the writing pass): the model sees ONLY the beat images, receives the
     enumeration as FIXED TEXT, and writes LABELED SECTIONS -- "GLOBAL:" (narration only;
     the caller prepends the enumeration) then "SEGMENT 1:".."SEGMENT N:" -- one flowing
@@ -30,8 +30,9 @@ from .axes import AUDIO_DIRECTIVES, CAMERA_CORES, MOTION_CORES
 
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
-# The maximum MSR subject references -- 1-4 subjects + 1 scene is the Licon-MSR LoRA's
-# trained contract (see the MSR rules below), not a taste choice.
+# The maximum MSR subject references -- 0-4 subjects + 1 required scene is the LiconMSR
+# node's contract (subjects optional, background required; see the MSR rules below), not
+# a taste choice.
 MAX_MSR_SUBJECTS = 4
 
 _system_skill_cache = None
@@ -54,21 +55,27 @@ def load_system_skill():
     return _system_skill_cache
 
 
-# ---- THE MSR RULEBOOK (vendored verbatim from vector-lab director_ltx.py) -------------
-# Verified against primary sources there: the official model card
-# (huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-Reference), the official sample
-# workflow (ComfyUI-Licon-MSR), the LiconMSR node source, and the LoRA metadata.
+# ---- THE MSR RULEBOOK (V2, re-verified against primary sources 2026-07-17) ------------
+# Sources: the official model card (huggingface.co/LiconStudio/LTX-2.3-Multiple-Subject-
+# Reference), the official V2 sample workflow (ComfyUI-Licon-MSR
+# LTX-2.3_MSR_sample_workflow_V2.json -- PromptRelayEncode node, V2 LoRA), the LiconMSR
+# node source, and the LoRA metadata. The V2 sample changed the prompt contract: the
+# global prompt is the enumeration ONLY, and the narration binds every referenced entity
+# BY TOKEN ("Image N"), not by re-described look. Examples below are written under this
+# node's punctuation law (no hyphens/parentheses/colons in generated output).
 
-MSR_RULES = """THE MSR RULES (etched -- follow ALL, no exceptions):
-1. REFERENCE COUNT: 2 to 5 reference images total -- 1 to 4 SUBJECTS plus exactly ONE scene
-   reference. Never more, never fewer.
+MSR_RULES = """THE MSR RULES (etched, V2 -- follow ALL, no exceptions):
+1. REFERENCE COUNT: 1 to 5 reference images total -- 0 to 4 SUBJECTS plus exactly ONE scene
+   reference. The scene is ALWAYS present (the compositor requires it); subjects are optional
+   (a scene-only run locks just the location). Never more.
 2. ONE SCENE ONLY: a video happens in ONE place, so exactly one reference is the scene, and the
    scene reference is always the LAST one.
 3. NUMBERING: references are numbered by their PANEL ORDER -- subjects first (1..k), the scene
-   last (k+1, labeled "(scene)"). That numbering is the composed reference clip's own frame
-   order; it never changes.
-4. ENUMERATION FIRST: the GLOBAL prompt OPENS with the enumeration -- one clause per reference
-   ("Reference image 1: ...", "Reference image 2: ...", and so on) -- BEFORE any narration.
+   last (k+1). That numbering is the composed reference clip's own frame order; it never changes.
+4. THE GLOBAL PROMPT IS THE ENUMERATION, NOTHING ELSE: one line per reference, in panel order --
+   "Image N: <concise look>." -- subjects first, the scene last. No narration, no story, no
+   camera in the global prompt (the official V2 sample's global prompt is exactly these lines
+   and nothing more).
 5. CONCISE BUT ACCURATE: over-description and under-description BOTH degrade consistency. One
    tight clause per reference, only the distinguishing features -- hair, attire, build, colours
    for a figure; form, material, colours for an object; architecture, palette, light for the
@@ -79,9 +86,19 @@ MSR_RULES = """THE MSR RULES (etched -- follow ALL, no exceptions):
    multi-angle sheet per subject (a character shown from several angles in ONE image; a car as
    a three-angle product sheet) -- the strongest identity signal. Enumerate the SUBJECT the
    sheet depicts (one entity, one clause), never the sheet's individual panels.
-7. BIND BY LOOK: after the enumeration, the narration points at every referenced element by the
-   EXACT look enumerated for it (never a name), so the reference tokens bind to the prompt
-   entities."""
+7. BIND BY TOKEN: the narration (the segment prompts) refers to every referenced entity by its
+   TOKEN "Image N" -- the enumeration's own number -- at EVERY mention: staging ("Image 1 stands
+   at the counter in frame left"), action ("Image 1 sways, bracing the counter"), and speech
+   (Image 1 says in a hoarse mumble, "I... want... water..."). Never re-describe the enumerated
+   look inline, never a proper name -- the token IS what binds the reference to the entity.
+   For referenced entities this token replaces the point-by-look rule; figures NOT on the
+   reference panel are still pointed at by look and frame position.
+8. CAMERA CUTS ARE ALLOWED: within the ONE scene the narration may cut between shots and must
+   say so explicitly ("the camera cuts to a close up of Image 2", a two shot, an over the
+   shoulder) -- the official V2 sample cuts freely. The LOCATION never changes.
+9. THE FIRST SEGMENT OPENS WITH THE SPATIAL ANCHOR: the scene's light and layout, then where
+   each referenced subject stands and what they wear, all by token ("Image 1 ... in frame left
+   ...; Image 2 ... in frame right ..."), before any action begins."""
 
 
 # ---- Locked output rules (vendored from insta_ltx.py, + the node's no-timing rule) ----
@@ -93,7 +110,7 @@ LOCKED_RULES = """CRITICAL OUTPUT RULES (follow ALL):
   "mid shot", "warm toned", "frame left" (never "close-up", "frame-left", never "--").
   No colons, no semicolons, no parentheses, no question marks, no curly quotes, no
   accents, no Unicode. Use ... for pauses. (Sole exception: when a fixed reference
-  enumeration is given to you, its "Reference image N:" labels keep their colon.)
+  enumeration is given to you, its "Image N:" labels keep their colon.)
 - PRESENT TENSE throughout. Describe what IS happening, like a cinematographer.
 - POSITIVE ONLY. Never write "no", "not", "without", "motionless", "silent". To say
   a figure does not move, write that the figure "holds its posture locked in place".
@@ -185,21 +202,23 @@ def clean_ref_clause(text, what):
 
 
 def format_enumeration(subject_clauses, scene_clause):
-    """The exact enumeration text that OPENS the global prompt (MSR rule 4), numbered by
-    panel order (rule 3): subjects first, scene last. Composed by US from pass-1 clauses --
-    the writing pass can no longer mis-attribute or drop it."""
+    """The exact V2 enumeration text -- the WHOLE global prompt on an MSR run (rule 4),
+    numbered by panel order (rule 3): one "Image N:" line per reference, subjects first,
+    scene last (no "(scene)" tag -- the V2 sample carries none), newline-joined (the V2
+    sample's exact shape). Composed by US from pass-1 clauses -- the writing pass can no
+    longer mis-attribute or drop it."""
     def clause(c):
         c = c.strip().rstrip(".")
         return c + "."
-    parts = [f"Reference image {j}: {clause(c)}"
+    parts = [f"Image {j}: {clause(c)}"
              for j, c in enumerate(subject_clauses, start=1)]
-    parts.append(f"Reference image {len(subject_clauses) + 1} (scene): {clause(scene_clause)}")
-    return " ".join(parts)
+    parts.append(f"Image {len(subject_clauses) + 1}: {clause(scene_clause)}")
+    return "\n".join(parts)
 
 
 # ---- The vision prompt ---------------------------------------------------------------
 
-def build_vision_prompt(beats, enumeration="", audio_notes=None,
+def build_vision_prompt(beats, enumeration="", msr_subjects=0, audio_notes=None,
                         motion="free", camera="free", audio="full", hint="",
                         global_only=False, global_text="", perceptions=None):
     """The Director vision prompt (pass 2 of the two-pass flow), built from the ACTUAL
@@ -213,8 +232,11 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
     Beats WITH an image consume vision-call IMAGE slots 1..n in order; the intro states
     the beat -> IMAGE mapping explicitly.
     `enumeration` -- the FIXED reference enumeration composed from pass 1 ("" = no MSR).
-    The model writes the GLOBAL as NARRATION ONLY; the caller prepends the enumeration
-    (composition, so it can never be dropped or mis-attributed by the writing pass).
+    The model leaves the GLOBAL to the enumeration (V2: the enumeration IS the global);
+    the caller prepends it (composition, so it can never be dropped or mis-attributed by
+    the writing pass).
+    `msr_subjects` -- how many enumeration entries are SUBJECTS (0 = scene only). Drives
+    the brief's placeholder-name aliases (sub1/ref1/... resolve to enumeration entries).
     `audio_notes` -- optional list of plain-text lines describing imported audio clips
     (context only; the model cannot hear them).
     `motion` / `camera` / `audio` -- the three orthogonal axes (see axes.py). The inert
@@ -281,9 +303,9 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
             "",
             "There are NO beat frames for this clip -- the referenced subjects and scene are",
             "described in the FIXED ENUMERATION below.",
-            f"INVENT the {n_segments} story beat(s) yourself: what those referenced subjects do in",
-            "the referenced scene, one beat per timeline segment, following THE USER'S BRIEF if",
-            "one is given.",
+            f"INVENT the {n_segments} story beat(s) yourself: what happens in the referenced",
+            "scene (and what the referenced subjects, if any, do there), one beat per timeline",
+            "segment, following THE USER'S BRIEF if one is given.",
         ]
 
     # Beat windows: pacing guidance ONLY (the no-timing locked rule keeps numbers out of
@@ -329,11 +351,11 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
         for entry in timeline_audio:
             lines.append(f"  TIMELINE AUDIO {entry['label']}: {entry['desc']}")
 
-    # When MSR references are in play AND real segments exist, follow the official MSR
-    # sample's prompt shape: the GLOBAL carries ONLY the fixed enumeration (the subjects
-    # and scene, described once), and ALL story lives in the SEGMENT sections. This is
-    # what the LoRA was trained on and what its own V2 guidance recommends (state each
-    # reference's role, then act). No enumeration = ordinary Director behavior.
+    # When MSR references are in play AND real segments exist, follow the official V2
+    # sample's prompt shape: the GLOBAL carries ONLY the fixed enumeration, ALL story
+    # lives in the SEGMENT sections, and the narration binds every referenced entity BY
+    # TOKEN ("Image N") -- what the V2 LoRA was trained on. No enumeration = ordinary
+    # Director behavior.
     msr_enum_shape = bool(enumeration) and not global_only
 
     if global_only:
@@ -349,14 +371,14 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
             "",
             "Your job: write the Director prompt set for this MSR clip. The GLOBAL is RESERVED for",
             "the FIXED reference enumeration ALONE (it is prepended automatically) -- so write the",
-            "GLOBAL as an EMPTY line, or at most one short present-tense line naming the setting by",
-            "its enumerated look. Do NOT narrate the story, the action, or the arc in the GLOBAL.",
-            "ALL of the story goes into the SEGMENT prompts: one present-tense paragraph per beat",
-            "that narrates ONLY what happens inside that beat's window, flowing naturally out of the",
-            "previous beat and into the next (one continuous shot, never a scene cut). In every",
-            "segment, point at each referenced subject by a SHORT distinguishing handle drawn from",
-            "its enumerated look (e.g. 'the figure in the red scarf'), never a full re-description",
-            "and never a name -- the enumeration already carries the full identity.",
+            "GLOBAL as an EMPTY line. Do NOT narrate the story, the action, or the arc in the",
+            "GLOBAL. ALL of the story goes into the SEGMENT prompts: one present-tense paragraph",
+            "per beat that narrates ONLY what happens inside that beat's window, flowing naturally",
+            "out of the previous beat and into the next. In every segment, refer to every",
+            "referenced entity by its TOKEN, Image N, at every mention (MSR rule 7). The FIRST",
+            "segment opens with the spatial anchor (rule 9). Camera CUTS between shots of the ONE",
+            "referenced scene are allowed and stated explicitly (rule 8); the location never",
+            "changes.",
         ]
     else:
         lines += [
@@ -393,7 +415,7 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
                 "THE USER'S EXISTING GLOBAL PROMPT:",
                 f"  {global_text}",
             ]
-            if enumeration and global_text.startswith("Reference image 1:"):
+            if enumeration and global_text.startswith(("Reference image 1:", "Image 1:")):
                 lines += [
                     "(The existing global prompt opens with a reference enumeration from an",
                     "earlier run. That enumeration is regenerated automatically and is NOT",
@@ -436,22 +458,36 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
             bind_note = (
                 "Do NOT write or repeat the enumeration yourself, and do NOT add narration to the\n"
                 "GLOBAL -- the enumeration IS the global. Put all story in the SEGMENTS, and there\n"
-                "bind under rule 7: point at every referenced element by the EXACT look enumerated\n"
-                "above (never a name), so the reference tokens bind to your prompt entities.\n\n"
+                "bind under rule 7: refer to every referenced entity by its TOKEN, Image N, at\n"
+                "every mention, so the reference tokens bind to your prompt entities.\n\n"
             )
         else:
             bind_note = (
                 "Do NOT write or repeat the enumeration yourself -- write the GLOBAL as the NARRATION\n"
-                "that follows it. Narrate under rule 7: point at every referenced element by the\n"
-                "EXACT look enumerated above (never a name), so the reference tokens bind to your\n"
-                "prompt entities.\n\n"
+                "that follows it. Narrate under rule 7: refer to every referenced entity by its\n"
+                "TOKEN, Image N, at every mention, so the reference tokens bind to your prompt\n"
+                "entities.\n\n"
             )
+        # PLACEHOLDER NAMES: the brief may address a reference by a short alias; the number is
+        # ALWAYS the enumeration/panel number. Subject aliases are stated only when subjects
+        # exist (a scene-only run gets only the scene aliases).
+        ph = ["PLACEHOLDER NAMES: THE USER'S BRIEF (if given) may address a reference by a"
+              " placeholder name:"]
+        if msr_subjects:
+            ph.append('"subject N" / "sub N" / "subN" / "reference N" / "ref N" / "refN" /'
+                      ' "reference image N" (any casing) all mean enumeration entry N (the'
+                      ' MSR panel order).')
+        ph.append('"scene" / "background" / "bg" / "subbg" mean the scene entry (the LAST'
+                  ' enumeration line).')
+        ph.append("Resolve every such name to its entry, apply the direction to it, and write"
+                  ' that entity in the output as its canonical token "Image N" (rule 7).')
         msr_block = (
             MSR_RULES + "\n\n"
             "The references were already READ in a separate pass. The enumeration for THIS clip\n"
             "is FIXED and will be placed at the START of the GLOBAL prompt AUTOMATICALLY:\n"
-            f"  {enumeration}\n"
+            + "\n".join("  " + l for l in enumeration.splitlines()) + "\n"
             + bind_note
+            + " ".join(ph) + "\n\n"
         )
 
     # Axis blocks, in the CLI's exact order: motion core first, then MSR, then camera and
@@ -466,8 +502,8 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
         "\n".join(f"SEGMENT {i}: <present-tense paragraph for beat {i}'s window ONLY>"
                   for i in range(1, n_segments + 1)) + "\n")
     if msr_enum_shape:
-        global_spec = ("GLOBAL: <leave empty, or at most one short line naming the setting by its"
-                       " enumerated look -- NO story here>\n")
+        global_spec = ("GLOBAL: <leave empty -- the fixed enumeration IS the global and is"
+                       " prepended automatically; NO story here>\n")
     elif enumeration:
         global_spec = ("GLOBAL: <one flowing paragraph anchoring the whole clip -- the NARRATION"
                        " that follows the fixed enumeration, never the enumeration itself>\n")
