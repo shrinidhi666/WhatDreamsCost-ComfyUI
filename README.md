@@ -238,16 +238,20 @@ The woman with silver hair in the red leather jacket walks toward the camera ...
 
 One click writes the **global prompt + one prompt per timeline segment** — grounded in what's actually on your timeline — using a **local Ollama** vision model. Fully self-contained (stdlib HTTP, no extra pip packages, no external tools).
 
-**Requirements:** a running [Ollama](https://ollama.com) server and a vision-capable model (e.g. a large Gemma). Enter the model tag once in the panel — it's remembered.
+**Requirements:** a running [Ollama](https://ollama.com) server and a vision-capable model (e.g. a large Gemma). Configure once in the node's **Settings menu (gear icon) → AI Prompt (Ollama)**: server URL, **Prompt Model** (writes the prompts), and optionally a **Vision Model** — it's remembered.
+
+**Vision Model (optional perception pass):** set an audio/video-capable model (e.g. `gemma4:12b-it-bf16`) and the AI Prompt actually **watches your timeline videos** (frames sampled densely enough to catch the motion — up to 4/s for short beats), **hears your audio clips and each video's own soundtrack** (transcribed speech, music, tone), and reads images/MSR references — then the Prompt Model writes from those faithful descriptions instead of guessing from a single frozen frame and a filename. One modality per call (the empirically reliable transport); frames are extracted in-memory, nothing touches disk. Clips are perceived whole — long audio in explicit 30s windows, and a video window needing more than 60 frames is a hard error, never a silent thinning. **Deep Read** lets the vision model think during perception (slower; better small-text/label reading). Leave the Vision Model empty and everything behaves exactly as before.
 
 **How to use:**
 1. Build your timeline as usual (keyframes / videos / MSR references — any mix, or MSR refs alone).
 2. Click **AI Prompt** in the toolbar to open the panel.
-3. Optionally type a **brief** ("quiet dusk mood, she notices the camera at the end") — the generated prompts must visibly realize it, and it may introduce elements not in your frames.
+3. Optionally type a **brief** ("quiet dusk mood, she notices the camera at the end") — the generated prompts must visibly realize it, and it may introduce elements not in your frames. When you already have prompts on the node (see the fidelity law below), the brief acts as a **director's note over them**: it re-stages and changes what it asks for; everything it doesn't touch stays truthful to your text.
 4. Optionally pick **motion / camera / audio** (defaults `free/free/full` let the model decide; other choices inject authoritative LTX-native directives — e.g. `push_in`, `no-music`).
 5. Click **Generate**. The global prompt box and every segment's local prompt fill in, beat by beat. Review, tweak, Queue.
 
-**What it knows:** every keyframe image, every video's first frame, the MSR panel references (enumeration-first prompting per the MSR rules), each segment's real time window (used for pacing only — the written prompts never contain timing words), any rough text you already typed on a segment (honored and written out properly), and your imported audio clips (as context).
+**What it knows:** every keyframe image, every video's first frame, the MSR panel references (enumeration-first prompting per the MSR rules), each segment's real time window (used for pacing only — the written prompts never contain timing words), your existing global + segment prompts, and your imported audio clips (as context).
+
+**The fidelity law:** your **existing prompts are the story's ground truth**. The global prompt and any segment text you've written go in and come out the same story — every subject, prop, action, mood and camera idea you stated is kept; only the craft is upgraded (LTX-native phrasing, staging, shot grammar, physical continuity, flow). Invention happens only where your text is silent. Empty brief + existing prompts = pure faithful enhancement; the brief, when present, directs changes on top. (With MSR references, the global stays reserved for the reference enumeration — your existing global's intent is carried into the segment prompts, per the trained MSR pattern.)
 
 **Beats:** the panel's "beats" number is the **total story beats you want for the clip**. Existing segments count as beats; if you ask for more, the uncovered part of the timeline (before/between/after your keyframes) is split into the remaining beats and created as text segments for you. Empty timeline + MSR refs = all beats invented (MSR-only mode).
 

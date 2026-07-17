@@ -111,6 +111,22 @@ LOCKED_RULES = """CRITICAL OUTPUT RULES (follow ALL):
   playback speed references into any prompt. The segment windows below size HOW MUCH
   happens; the words describe only WHAT happens."""
 
+# Two extra CRITICAL rules, injected ONLY when a perception pass supplied media
+# descriptions (the inert path stays byte-identical). They live inside the CRITICAL
+# OUTPUT RULES block because trailing-prose versions were demonstrably ignored (the
+# "frozen scene" failure in testing, 2026-07-17); wording iterates with live runs.
+PERCEPTION_RULES = """
+- CAPTURE IS NOT CHOREOGRAPHY. A media description saying the source is still, static,
+  or unchanging describes only the CAPTURE. Your written beat still carries living
+  motion: a breath, a shift of weight, fabric moving, a glance. Never write a frozen
+  scene.
+- THE IMPORTED AUDIO IS PART OF THE FINISHED CLIP. Treat every described audio clip as
+  the clip's intended soundtrack: never contradict it, and write each beat's sound to
+  coexist with it. When its speech or vocal sound belongs to a visible figure, give that
+  figure the matching mouth movement at the right beat and quote the line ONCE. When it
+  is a voiceover that does not depict the scene, keep every figure's mouth free of
+  competing speech and keep the written ambience sparse beneath it."""
+
 
 # ---- Reference reading (perception only, ONE image per call) ---------------------------
 #
@@ -185,7 +201,7 @@ def format_enumeration(subject_clauses, scene_clause):
 
 def build_vision_prompt(beats, enumeration="", audio_notes=None,
                         motion="free", camera="free", audio="full", hint="",
-                        global_only=False):
+                        global_only=False, global_text="", perceptions=None):
     """The Director vision prompt (pass 2 of the two-pass flow), built from the ACTUAL
     timeline. The ONLY images this pass receives are the beat frames -- the MSR references
     were already read by pass 1 and arrive here as `enumeration`, finished text.
@@ -204,12 +220,29 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
     `motion` / `camera` / `audio` -- the three orthogonal axes (see axes.py). The inert
     defaults ("free"/"free"/"full") inject nothing; other choices inject their directive
     block in the CLI's exact order: motion core, MSR block, camera, audio, locked rules.
-    `hint` -- THE USER'S BRIEF: stated EARLY as the clip's authoritative creative
-    direction AND re-stated at the end, outranking the model's own reading of the frames
-    and the axis directives; only the output-format rules (and the MSR rules, when
-    references are in play) stay absolute. Empty hint injects nothing.
+
+    THE PRECEDENCE (the fidelity law, stated once in the prompt): output rules (absolute)
+    -> the hint, where it asks for changes -> the user's existing texts -> the model's
+    own reading of the frames. Invention is allowed only where all of these are silent.
+    `global_text` -- the user's EXISTING GLOBAL PROMPT from the Director node ("" = none).
+    Together with the per-beat texts it forms THE USER'S EXISTING PROMPTS: the story's
+    ground truth for the rewrite -- every stated subject, prop, action, mood and camera
+    idea is kept; only the craft is upgraded. Neither present injects nothing (the prompt
+    stays byte-identical to the pre-fidelity behavior).
+    `hint` -- THE USER'S BRIEF: with existing texts it is the DIRECTOR'S NOTE for the
+    rewrite (outranks the existing texts only where it asks for changes); without them it
+    is the clip's authoritative creative direction, as before. Stated EARLY and re-stated
+    at the end. Empty hint injects nothing.
     `global_only` -- write ONLY the GLOBAL prompt (the beats still inform it as context,
     but no SEGMENT sections are demanded -- the panel's "global only" convenience mode).
+    `perceptions` -- the perception pass's faithful media descriptions (None = feature
+    off, prompt byte-identical to before). Structure:
+        {"beats": {beat_no: {"kind": "image"|"video", "desc": str, "seconds": float}},
+         "beat_audio": {beat_no: str},     # a video beat's own soundtrack, described
+         "timeline_audio": [{"label": str, "desc": str}]}   # imported audio clips
+    With perceptions, this call carries NO media -- beats are declared as perceived and
+    the MEDIA DESCRIPTIONS block is their ground truth; PERCEPTION_RULES join the
+    critical rules (capture is not choreography; imported audio is the soundtrack).
     """
     if motion not in MOTION_CORES:
         raise ValueError(f"Unknown motion '{motion}'. Choices: {list(MOTION_CORES)}")
@@ -225,10 +258,16 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
         "You are an LTX 2.3 DIRECTOR prompt writer for one continuous cinematic clip built from",
         f"{n_segments} story beat(s). You are given, in order:",
     ]
+    perceived_beats = (perceptions or {}).get("beats") or {}
     img_idx = 0
     any_image = False
     for i, b in enumerate(beats, start=1):
-        if b.get("has_image"):
+        if i in perceived_beats:
+            kind = perceived_beats[i].get("kind", "media")
+            lines.append(f"  (story BEAT {i}'s {kind} was watched by a perception pass -- its"
+                         " faithful description is under MEDIA DESCRIPTIONS below; treat it as"
+                         " ground truth for what this beat shows.)")
+        elif b.get("has_image"):
             img_idx += 1
             any_image = True
             lines.append(f"  IMAGE {img_idx} = story BEAT {i} -- the frame the clip passes through"
@@ -237,7 +276,7 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
         else:
             lines.append(f"  (story BEAT {i} has NO frame image -- invent what happens in it from"
                          " the surrounding beats, the references, and the beat notes below.)")
-    if not any_image and enumeration:
+    if not any_image and enumeration and not perceived_beats:
         lines += [
             "",
             "There are NO beat frames for this clip -- the referenced subjects and scene are",
@@ -248,7 +287,8 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
         ]
 
     # Beat windows: pacing guidance ONLY (the no-timing locked rule keeps numbers out of
-    # the written prompts). Existing segment text is the user's rough intent -- honor it.
+    # the written prompts). Existing segment text is a plain data line here -- the
+    # fidelity LAW that governs it lives in ONE place, THE USER'S EXISTING PROMPTS block.
     lines += ["", "BEAT WINDOWS AND NOTES (pacing guidance ONLY -- per the timing rule, these"
                   " numbers NEVER appear in your written prompts):"]
     for i, b in enumerate(beats, start=1):
@@ -262,14 +302,32 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
             window += " -- long; the action can build, land, and settle."
         lines.append(window)
         if b.get("text"):
-            lines.append(f"    The user's rough intent for this beat (honor it, write it properly):"
-                         f" {b['text']}")
+            lines.append(f"    The user's existing prompt for this beat: {b['text']}")
 
     if audio_notes:
         lines += ["", "TIMELINE AUDIO (context only -- you cannot hear these; acknowledge sound"
                       " that overlaps a beat where it plainly fits):"]
         for note in audio_notes:
             lines.append(f"  {note}")
+
+    # --- MEDIA DESCRIPTIONS (perception pass output = ground truth for what the media
+    # contains). Injected only when the perception feature ran -- inert path unchanged.
+    if perceptions:
+        beat_audio = perceptions.get("beat_audio") or {}
+        timeline_audio = perceptions.get("timeline_audio") or []
+        lines += ["", "MEDIA DESCRIPTIONS (a perception pass watched and listened to the"
+                      " timeline's ACTUAL media; these are ground truth for what each beat"
+                      " looks and sounds like -- never contradict them):"]
+        for i in sorted(perceived_beats):
+            p = perceived_beats[i]
+            head = f"  BEAT {i} {p.get('kind', 'media')}"
+            if p.get("kind") == "video" and p.get("seconds"):
+                head += f" ({p['seconds']:.1f}s)"
+            lines.append(f"{head}: {p['desc']}")
+            if i in beat_audio:
+                lines.append(f"  BEAT {i} video's own soundtrack: {beat_audio[i]}")
+        for entry in timeline_audio:
+            lines.append(f"  TIMELINE AUDIO {entry['label']}: {entry['desc']}")
 
     # When MSR references are in play AND real segments exist, follow the official MSR
     # sample's prompt shape: the GLOBAL carries ONLY the fixed enumeration (the subjects
@@ -309,16 +367,67 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
             "naturally out of the previous beat and into the next (one continuous shot, never a",
             "scene cut).",
         ]
-    hint = (hint or "").strip()
-    if hint:
+    # --- THE USER'S EXISTING PROMPTS block (the fidelity law, stated ONCE). Injected
+    # only when existing texts are present -- with none, the prompt stays byte-identical
+    # to the pre-fidelity behavior.
+    global_text = " ".join((global_text or "").split())
+    has_existing = bool(global_text) or any(b.get("text") for b in beats)
+    if has_existing:
+        if global_text and any(b.get("text") for b in beats):
+            sources = ("The beat notes above and the existing global prompt below state"
+                       " what the user was trying to do.")
+        elif global_text:
+            sources = "The existing global prompt below states what the user was trying to do."
+        else:
+            sources = "The beat notes above state what the user was trying to do."
         lines += [
             "",
-            "THE USER'S BRIEF (the clip's creative direction -- the finished prompts must",
-            "VISIBLY realize this; it OUTRANKS your own reading of the frames and every axis",
-            "directive below; only the CRITICAL OUTPUT RULES"
-            + (" and THE MSR RULES" if enumeration else "") + " stay absolute):",
-            f"  {hint}",
+            "THE USER'S EXISTING PROMPTS ARE THE STORY'S GROUND TRUTH. " + sources,
+            "Your rewrite must stay TRUTHFUL to them: keep every subject, prop, action, mood",
+            "and camera idea they state. Upgrade ONLY the craft: staging, shot grammar,",
+            "physical continuity, vocabulary, flow. Invent freely ONLY where they are silent.",
         ]
+        if global_text:
+            lines += [
+                "",
+                "THE USER'S EXISTING GLOBAL PROMPT:",
+                f"  {global_text}",
+            ]
+            if enumeration and global_text.startswith("Reference image 1:"):
+                lines += [
+                    "(The existing global prompt opens with a reference enumeration from an",
+                    "earlier run. That enumeration is regenerated automatically and is NOT",
+                    "intent; read only the narration after it as the user's intent.)",
+                ]
+            if msr_enum_shape:
+                lines += [
+                    "Your output GLOBAL stays reserved for the reference enumeration as",
+                    "instructed above; carry the existing global prompt's intent into the",
+                    "SEGMENT prompts instead.",
+                ]
+
+    hint = (hint or "").strip()
+    if hint:
+        if has_existing:
+            lines += [
+                "",
+                "THE USER'S BRIEF (the director's note for this rewrite -- the finished",
+                "prompts must VISIBLY realize this; where it asks for changes it OUTRANKS the",
+                "existing prompts, the frames, and every axis directive below; everything it",
+                "does not touch stays truthful to THE USER'S EXISTING PROMPTS; only the",
+                "CRITICAL OUTPUT RULES"
+                + (" and THE MSR RULES" if enumeration else "") + " stay absolute):",
+                f"  {hint}",
+            ]
+        else:
+            lines += [
+                "",
+                "THE USER'S BRIEF (the clip's creative direction -- the finished prompts must",
+                "VISIBLY realize this; it OUTRANKS your own reading of the frames and every axis",
+                "directive below; only the CRITICAL OUTPUT RULES"
+                + (" and THE MSR RULES" if enumeration else "") + " stay absolute):",
+                f"  {hint}",
+            ]
     intro = "\n".join(lines)
 
     msr_block = ""
@@ -380,8 +489,9 @@ def build_vision_prompt(beats, enumeration="", audio_notes=None,
     if hint:
         brief_reminder = ("\n\nREMEMBER THE USER'S BRIEF -- every prompt must visibly "
                           f"realize it:\n  {hint}")
+    locked = LOCKED_RULES + (PERCEPTION_RULES if perceptions else "")
     return (f"{intro}\n\n{core_block}{msr_block}{camera_block}{audio_block}"
-            f"{LOCKED_RULES}{task}{brief_reminder}")
+            f"{locked}{task}{brief_reminder}")
 
 
 # ---- The labeled-sections parser (the output contract) --------------------------------

@@ -4208,7 +4208,15 @@ class TimelineEditor {
       try { storedModel = localStorage.getItem("wdc_ai_prompt_model") || ""; } catch (e) { }
       p.aiPromptOllama = { url: "http://localhost:11434", model: storedModel };
     }
-    return p.aiPromptOllama;
+    const s = p.aiPromptOllama;
+    // Perception fields (added with the vision-model feature); migrate older objects.
+    if (typeof s.visionModel !== "string") {
+      let storedVision = "";
+      try { storedVision = localStorage.getItem("wdc_ai_prompt_vision_model") || ""; } catch (e) { }
+      s.visionModel = storedVision;
+    }
+    if (typeof s.visionThink !== "boolean") s.visionThink = false;
+    return s;
   }
 
   _updateAiPanelVisibility() {
@@ -4225,13 +4233,13 @@ class TimelineEditor {
 
     const label = document.createElement("div");
     label.textContent = "AI Prompt";
-    label.title = "Generate the global + segment prompts from the timeline (keyframes, video frames, MSR references) with a local Ollama vision model. The hint steers the writing; segment prompts land on their timeline segments.";
+    label.title = "Generate the global + segment prompts from the timeline (keyframes, video frames, MSR references) with a local Ollama vision model. Existing global/segment prompts are the story's ground truth and are enhanced faithfully; the hint directs changes on top. Segment prompts land on their timeline segments.";
     label.style.cssText = "font-size:11px;color:#aaa;margin-right:4px;";
     panel.appendChild(label);
 
     const hintInput = document.createElement("textarea");
     hintInput.placeholder = "Optional brief, e.g. \"quiet dusk mood, she notices the camera at the end\"";
-    hintInput.title = "The clip's creative brief — the generated prompts must visibly realize it (it outranks the model's own reading of the frames; output-format rules still apply). Saved with the timeline.";
+    hintInput.title = "Optional director's note. Existing global/segment prompts are always the story's ground truth — the AI rewrites them faithfully with better craft; this note directs changes on top (where it asks for changes, it outranks the existing text). Output-format rules still apply. Saved with the timeline.";
     hintInput.rows = 1;
     hintInput.spellcheck = false;
     hintInput.style.cssText = "flex:1 1 260px;min-width:200px;resize:vertical;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:3px 6px;";
@@ -4306,29 +4314,8 @@ class TimelineEditor {
     this._aiGlobalOnlyCheck = globalOnlyCheck;
     panel.appendChild(globalOnlyLabel);
 
-    const modelInput = document.createElement("input");
-    modelInput.type = "text";
-    modelInput.placeholder = "ollama model, e.g. gemma4:26b-a4b-it-qat";
-    modelInput.title = "The Ollama vision model tag (needs image support). Saved on the node and remembered as the default for new nodes.";
-    modelInput.style.cssText = "flex:0 1 200px;min-width:150px;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:3px 6px;";
-    modelInput.addEventListener("change", () => {
-      this._aiSettings().model = modelInput.value.trim();
-      try { localStorage.setItem("wdc_ai_prompt_model", modelInput.value.trim()); } catch (e) { }
-    });
-    this._aiModelInput = modelInput;
-    panel.appendChild(modelInput);
-
-    const urlInput = document.createElement("input");
-    urlInput.type = "text";
-    urlInput.placeholder = "http://localhost:11434";
-    urlInput.title = "The Ollama server URL. Saved on the node.";
-    urlInput.style.cssText = "flex:0 1 150px;min-width:120px;background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;padding:3px 6px;";
-    urlInput.addEventListener("change", () => {
-      this._aiSettings().url = urlInput.value.trim();
-    });
-    this._aiUrlInput = urlInput;
-    panel.appendChild(urlInput);
-
+    // Ollama URL / prompt model / vision model / deep read moved to the node's
+    // Settings menu (gear icon) -- the panel keeps only the creative controls.
     const genBtn = document.createElement("button");
     genBtn.className = "pr-btn";
     genBtn.textContent = "Generate";
@@ -4388,9 +4375,6 @@ class TimelineEditor {
     setSel(this._aiCameraSelect, a.camera, "free");
     setSel(this._aiAudioSelect, a.audio, "full");
     if (this._aiGlobalOnlyCheck) this._aiGlobalOnlyCheck.checked = !!a.globalOnly;
-    const s = this._aiSettings();
-    if (this._aiModelInput) this._aiModelInput.value = s.model || "";
-    if (this._aiUrlInput) this._aiUrlInput.value = s.url || "http://localhost:11434";
   }
 
   _aiSetStatus(text, isError) {
@@ -4407,8 +4391,6 @@ class TimelineEditor {
       return;
     }
     const settings = this._aiSettings();
-    if (this._aiModelInput) settings.model = this._aiModelInput.value.trim();
-    if (this._aiUrlInput) settings.url = this._aiUrlInput.value.trim() || "http://localhost:11434";
     const aip = this._ensureAiPrompt();
     if (this._aiHintInput) aip.hint = this._aiHintInput.value;
     if (this._aiSegmentsInput) aip.segments = Math.max(1, parseInt(this._aiSegmentsInput.value, 10) || 1);
@@ -4432,7 +4414,12 @@ class TimelineEditor {
       camera: aip.camera || "free",
       audio: aip.audio || "full",
       global_only: !!aip.globalOnly,
-      settings: { model: settings.model, url: settings.url },
+      settings: {
+        model: settings.model,
+        url: settings.url,
+        vision_model: settings.visionModel || "",
+        vision_think: !!settings.visionThink,
+      },
     };
 
     this._aiBusy = true;
@@ -11273,6 +11260,109 @@ class TimelineEditor {
     });
 
     menu.appendChild(this._makeSettingRow("Workspace Folder", btnOpenFolder));
+
+    // --- AI Prompt (Ollama) configuration ---
+    // Infra config lives here; the AI Prompt panel keeps only the creative controls.
+    const aiDivider = document.createElement("div");
+    aiDivider.className = "pr-settings-divider";
+    menu.appendChild(aiDivider);
+
+    const aiTitle = document.createElement("div");
+    aiTitle.textContent = "AI Prompt (Ollama)";
+    aiTitle.style.cssText = "font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin:2px 0 4px 0;";
+    menu.appendChild(aiTitle);
+
+    const aiSettings = this._aiSettings();
+    const mkAiText = (placeholder, title, value, onChange, listId) => {
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.className = "pr-settings-input";
+      inp.placeholder = placeholder;
+      inp.title = title;
+      inp.value = value || "";
+      inp.spellcheck = false;
+      inp.style.width = "130px";
+      if (listId) {
+        // Datalists filter suggestions by the CURRENT text, so a filled field would
+        // only ever suggest itself. Clear on focus (the full list drops down); if the
+        // user leaves WITHOUT typing or picking, restore the old value; anything they
+        // typed or picked -- including an intentional empty -- commits on blur.
+        inp.setAttribute("list", listId);
+        let touched = false;
+        inp.addEventListener("focus", () => {
+          inp.dataset.prev = inp.value;
+          touched = false;
+          inp.value = "";
+        });
+        inp.addEventListener("input", () => { touched = true; });
+        inp.addEventListener("blur", () => {
+          if (!touched) {
+            inp.value = inp.dataset.prev || "";
+          } else {
+            onChange(inp.value.trim());
+          }
+          delete inp.dataset.prev;
+        });
+      } else {
+        inp.addEventListener("change", () => onChange(inp.value.trim()));
+      }
+      inp.addEventListener("click", (e) => e.stopPropagation());
+      return inp;
+    };
+
+    // Installed-model suggestions, fetched live from the Ollama server (proxied through
+    // the ComfyUI backend). Free text stays allowed -- the datalist only suggests.
+    const modelListId = `pr-ai-models-${this.node.id}`;
+    const modelList = document.createElement("datalist");
+    modelList.id = modelListId;
+    menu.appendChild(modelList);
+    (async () => {
+      try {
+        const url = encodeURIComponent(this._aiSettings().url || "");
+        const resp = await api.fetchApi(`/ltx_director/ai_prompt/models?url=${url}`);
+        if (resp.status !== 200) return;
+        const data = await resp.json();
+        for (const name of (data.models || [])) {
+          const opt = document.createElement("option");
+          opt.value = name;
+          modelList.appendChild(opt);
+        }
+      } catch (e) { /* suggestions only -- typing still works */ }
+    })();
+
+    menu.appendChild(this._makeSettingRow("Server URL", mkAiText(
+      "http://localhost:11434",
+      "The Ollama server URL.",
+      aiSettings.url,
+      (v) => { this._aiSettings().url = v || "http://localhost:11434"; })));
+
+    menu.appendChild(this._makeSettingRow("Prompt Model", mkAiText(
+      "e.g. gemma4:26b-a4b-it-qat",
+      "The Ollama model that WRITES the global + segment prompts. Remembered as the default for new nodes.",
+      aiSettings.model,
+      (v) => {
+        this._aiSettings().model = v;
+        try { localStorage.setItem("wdc_ai_prompt_model", v); } catch (e) { }
+      }, modelListId)));
+
+    menu.appendChild(this._makeSettingRow("Vision Model", mkAiText(
+      "empty = off, e.g. gemma4:12b-it-bf16",
+      "Optional PERCEPTION model (audio/video capable, e.g. gemma4 12B). When set it actually watches timeline videos (sampled frames), hears audio clips, and reads images/MSR references; the prompt model then writes from those faithful descriptions. Empty = off (today's behavior).",
+      aiSettings.visionModel,
+      (v) => {
+        this._aiSettings().visionModel = v;
+        try { localStorage.setItem("wdc_ai_prompt_vision_model", v); } catch (e) { }
+      }, modelListId)));
+
+    const deepCheck = document.createElement("input");
+    deepCheck.type = "checkbox";
+    deepCheck.checked = !!aiSettings.visionThink;
+    deepCheck.title = "Deep read: let the vision model THINK during perception. Slower but better at small text/labels and fine detail; off is the fast default with quality intact.";
+    deepCheck.addEventListener("change", () => {
+      this._aiSettings().visionThink = deepCheck.checked;
+    });
+    deepCheck.addEventListener("click", (e) => e.stopPropagation());
+    menu.appendChild(this._makeSettingRow("Deep Read", deepCheck));
 
 
 

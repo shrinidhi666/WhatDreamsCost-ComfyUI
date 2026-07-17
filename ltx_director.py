@@ -30,6 +30,7 @@ from .prompt_relay import (
 )
 
 from .patches import detect_model_type, apply_patches
+from .secure_paths import contained, resolve_existing, upload_target
 
 log = logging.getLogger(__name__)
 
@@ -78,14 +79,15 @@ async def ltx_director_check_file(request):
     temp_dir = os.path.join(upload_dir, "whatdreamscost")
     
     # 1. Check if the exact filename exists in whatdreamscost or root input dir
+    # (containment-checked: a traversal name must not probe outside the input folder)
     possible_paths = [
         os.path.join(temp_dir, filename),
         os.path.join(upload_dir, filename)
     ]
-    
+
     found_path = None
     for p in possible_paths:
-        if os.path.exists(p) and os.path.isfile(p):
+        if contained(p, upload_dir) and os.path.exists(p) and os.path.isfile(p):
             if file_size:
                 try:
                     if os.path.getsize(p) == int(file_size):
@@ -281,18 +283,12 @@ async def ltx_director_get_audio(request):
         return web.json_response({"error": "Missing filename"}, status=400)
 
     upload_dir = folder_paths.get_input_directory()
-    
-    clean_filename = filename.replace('\\', '/')
-    file_path = os.path.join(upload_dir, clean_filename)
-    if not os.path.exists(file_path):
-        basename = os.path.basename(clean_filename)
-        temp_path = os.path.join(upload_dir, "whatdreamscost", basename)
-        if os.path.exists(temp_path):
-            file_path = temp_path
-        else:
-            file_path = os.path.join(upload_dir, basename)
-        
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+
+    # Containment-checked resolution (same candidate order as before: exact relative
+    # name, whatdreamscost/basename, basename) -- a traversal name must not read
+    # outside the input folder.
+    file_path = resolve_existing(filename, upload_dir)
+    if not file_path:
         return web.json_response({"error": "File not found"}, status=404)
 
     _, ext = os.path.splitext(file_path)
@@ -360,13 +356,13 @@ async def ltx_director_upload_chunk(request):
     upload_dir = os.path.join(folder_paths.get_input_directory(), "whatdreamscost")
     os.makedirs(upload_dir, exist_ok=True)
 
-    # Sanitize filename to prevent path traversal attacks (e.g. ../../etc/passwd)
-    filename = os.path.basename(filename)
-    file_path = os.path.join(upload_dir, filename)
-
-    # Belt-and-suspenders: confirm the resolved path is still inside the upload directory
-    if not os.path.realpath(file_path).startswith(os.path.realpath(upload_dir)):
+    # Containment-checked write path (shared helper; also closes the sibling-directory
+    # prefix subtlety the earlier inline check had).
+    try:
+        file_path = upload_target(filename, upload_dir)
+    except ValueError:
         return web.json_response({"error": "Invalid filename"}, status=400)
+    filename = os.path.basename(file_path)
 
     # Append chunk to file (write fresh on first chunk, append on subsequent)
     mode = "ab" if chunk_index > 0 else "wb"

@@ -8,6 +8,8 @@ from server import PromptServer
 from aiohttp import web
 import comfy.utils
 
+from .secure_paths import upload_target
+
 # Custom API route to serve video files from anywhere on the user's system for the frontend preview
 @PromptServer.instance.routes.get("/video_ui_custom_view")
 async def custom_view(request):
@@ -34,17 +36,23 @@ async def upload_chunk(request):
 
     upload_dir = os.path.join(folder_paths.get_input_directory(), "whatdreamscost")
     os.makedirs(upload_dir, exist_ok=True)
-    file_path = os.path.join(upload_dir, filename)
+
+    # Containment-checked write path -- a traversal name ("..\\..\\name") must never
+    # escape the upload folder (P0 fix; same law as /ltx_director_upload_chunk).
+    try:
+        file_path = upload_target(filename, upload_dir)
+    except ValueError:
+        return web.json_response({"error": "Invalid filename"}, status=400)
 
     # Append to file if it's not the first chunk, otherwise write new
     mode = "ab" if chunk_index > 0 else "wb"
-    
+
     # Offload the blocking read/write disk I/O to a thread executor
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _read_and_write_file_chunk, file, file_path, mode)
 
     if chunk_index == total_chunks - 1:
-        return web.json_response({"name": f"whatdreamscost/{filename}"})
+        return web.json_response({"name": f"whatdreamscost/{os.path.basename(file_path)}"})
     return web.json_response({"status": "ok"})
 
 

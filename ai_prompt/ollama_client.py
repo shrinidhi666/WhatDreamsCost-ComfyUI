@@ -66,6 +66,21 @@ def _post_json(url, payload, timeout):
             f"Cannot reach Ollama at {url} ({e.reason}). Is the Ollama server running?") from e
 
 
+def list_models(base_url=DEFAULT_URL):
+    """Installed model tags from the Ollama server (GET /api/tags), sorted. Raises
+    OllamaError when the server is unreachable -- the caller decides how soft to fail."""
+    url = base_url.rstrip("/") + "/api/tags"
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        raise OllamaError(
+            f"Cannot reach Ollama at {base_url} ({e.reason}). Is the Ollama server running?") from e
+    names = [m.get("name", "") for m in (data.get("models") or []) if m.get("name")]
+    return sorted(names)
+
+
 def check_server(base_url=DEFAULT_URL):
     """Return the Ollama server version string, or raise OllamaError. A cheap reachability
     probe (loads no model)."""
@@ -100,6 +115,15 @@ def generate_vision(prompt, images_b64, model, system=None, base_url=DEFAULT_URL
         payload["images"] = list(images_b64)   # top-level, NOT inside options
     url = base_url.rstrip("/") + "/api/generate"
     data = _post_json(url, payload, timeout)
+    # Context guard: Ollama silently truncates input past num_ctx; the fork's law is to
+    # FAIL LOUDLY instead. prompt_eval_count is the real token count of everything sent
+    # (media included), so >=95% of the window means truncation happened or is imminent.
+    n_in = int(data.get("prompt_eval_count") or 0)
+    if n_in >= int(0.95 * int(num_ctx)):
+        raise OllamaError(
+            f"Input filled the context window ({n_in} of {num_ctx} tokens) -- Ollama "
+            f"truncates silently past the limit. Reduce the media/beat load or raise "
+            f"num_ctx; refusing to continue on possibly-truncated input.")
     text = (data.get("response") or "").strip()
     if not text:
         raise OllamaError("Ollama returned an empty response. Try again or use another model.")

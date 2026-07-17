@@ -62,6 +62,62 @@ sentences** to cover all the key aspects of a typical clip (scale up for longer/
 LAYER instructions across runs -- the more actions/characters/instructions stacked into one
 prompt, the higher the chance some are dropped. First get the core beat right, then add.
 
+**Prompt length scales with WHATEVER the clip carries** -- action, performance, dialogue,
+audio, story, all of it. The 4-8 sentences are a floor for a typical clip, not a ceiling.
+Do not reason about length from a category checklist; study the two OFFICIAL SAMPLE PROMPTS
+in section 1b -- they show how much a loaded clip earns and how the load is laid out in
+time. CAVEAT for the Director/relay pipeline: each SEGMENT prompt stays ONE flowing
+paragraph and one continuous shot (the pipeline contract) -- the samples' multi-paragraph
+shape is for standalone full-clip prompts only.
+
+---
+
+## 1b. OFFICIAL SAMPLE PROMPTS (docs.ltx.io -- study the shape, don't imitate the content)
+
+These are the two complete sample prompts from the official LTX docs, verbatim (punctuation
+normalized to this guide's ASCII rule). Read them as WORKED EXAMPLES of everything in this
+guide: beats laid out in time order, each element (action, camera, light, sound, any speech)
+landing AT its moment, and length matched to how much the clip carries.
+
+**Official sample 1:**
+
+> EXT. SMALL TOWN STREET -- MORNING -- LIVE NEWS BROADCAST
+> The shot opens on a news reporter standing in front of a row of cordoned-off cars, yellow
+> caution tape fluttering behind him. The light is warm, early sun reflecting off the camera
+> lens. The faint hum of chatter and distant drilling fills the air.
+> The reporter, composed but visibly excited, looks directly into the camera, microphone in
+> hand.
+> Reporter (live): "Thank you, Sylvia. And yes -- this is a sentence I never thought I'd say
+> on live television -- but this morning, here in the quiet town of New Castle, Vermont...
+> black gold has been found!"
+> He gestures slightly toward the field behind him.
+> Reporter (grinning): "If my cameraman can pan over, you'll see what all the excitement's
+> about."
+> The camera pans right, slowly revealing a construction site surrounded by workers in hard
+> hats. A beat of silence -- then, with a sudden roar, a geyser of oil erupts from the
+> ground, blasting upward in a violent plume.
+> Workers cheer and scramble, the black stream glistening in the morning light. The camera
+> shakes slightly, trying to stay focused through the chaos.
+> Reporter (off-screen, shouting over the noise): "There it is, folks -- the moment New
+> Castle will never forget!"
+> The camera catches the sunlight gleaming off the oil mist before pulling back, revealing
+> the entire scene -- the small-town skyline silhouetted against the wild fountain of oil.
+
+**Official sample 2:**
+
+> The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the
+> wooden floor as incense smoke drifts lazily in the air. The senior frog instructor sits
+> cross-legged at the center, eyes closed, voice deep and calm. "We are one with the pond."
+> All the frogs answer softly: "Ommm..." "We are one with the mud." "Ommm..." He smiles
+> faintly. "We are one with the flies." A pause.
+> The camera pans to the side towards one frog who twitches, eyes darting. Suddenly its
+> tongue snaps out, catching a fly mid-air and pulling it into its mouth.
+> The master exhales slowly, still serene. "But we do not chase the flies..." Beat. "not
+> during class."
+> The guilty frog lowers its head in shame, folding its hands back into a meditative pose.
+> The other frogs resume their chant: "Ommm..." Camera holds for a moment on the embarrassed
+> frog, eyes closed too tightly, pretending nothing happened.
+
 **Image-to-Video: do NOT re-describe the static elements already visible in the image.** Describe
 the MOTION, the camera, the lighting CHANGE and the AUDIO -- not what the still already shows. Re-
 stating fixed visible details wastes the prompt and can fight the input frame.
@@ -120,6 +176,32 @@ actions.
 - **ONE-frame:** invent the natural continuation of what the still SETS UP -- the motion implied
   by the pose, the moment, the held tension.
 
+### 3b. DYNAMICS -- make the shot INTERESTING, not just correct (MANDATORY)
+
+A clip that only states clean events ("he runs, gets in, it drives off") is DEAD on screen.
+Every shot must carry, woven into the single arc (NOT as extra simultaneous actions):
+
+1. **A COMPLICATION / gag / near-miss** -- something physical that gives the beat life: a stumble
+   caught, a wobble, an object nearly dropped and grabbed, a slip on a wet surface, a fumble, a
+   double-take, an overshoot. The action succeeds, but not cleanly. (Comedy = competence fighting
+   chaos.) This is the single biggest lever on "boring vs alive".
+2. **An ACTIVE CAMERA CHOICE** -- the lens PARTICIPATES, it does not just observe: a low move that
+   races with the subject, a snap-zoom onto a reaction, a whip that LANDS on the peak, a push that
+   arrives on the gag. "Static wide" is allowed ONLY when stillness is the point (a held freeze, a
+   quiet sunrise); otherwise pick a move that adds energy. (Use the cinematographer skill.)
+3. **CHAOS / PHYSICAL TEXTURE** -- the small real details that sell motion: things wobble, slosh,
+   skid, rattle, spray, bounce, flap; a prop reacts; the ground is wet; breath fogs. Name one or
+   two concrete textures, not a clean vacuum.
+4. **AN ENERGY BEAT (a curve, not a flat line)** -- tension -> burst -> a HITCH -> release. The
+   freeze that explodes; the engine that coughs THEN catches; the reach that misses THEN grabs.
+   The hitch is what makes the release land. A single uniform-speed action has no beat and reads
+   flat.
+
+Push the energy to the project's tone ceiling (broad slapstick vs grounded) -- but ALWAYS have a
+complication, an active camera, texture, and a beat. Boring is a prompting failure, not the model.
+Keep it to ONE dominant motion still (section 3) -- the complication is PART of that motion's arc,
+never a second competing action (section: no contradictory/simultaneous actions).
+
 ---
 
 ## 4. CAMERA -- describe the lens move as its own clause
@@ -175,9 +257,9 @@ analog film look, fashion editorial, pixelated animation, surreal). Official sty
 - **Film characteristics:** jittery stop-motion, pixelated edges, lens flares, film grain.
 - **Scale indicators:** expansive, epic, intimate, claustrophobic.
 - **Pacing / temporal effects:** slow motion, time-lapse, lingering shot, continuous shot,
-  dynamic movement, sudden stop. (Official examples also use rapid cuts / freeze-frame /
-  fade-in / fade-out -- valid for LTX generally, but in a segment/relay pipeline each prompt is
-  ONE continuous shot, so keep cut/fade language OUT of per-segment prompts.)
+  dynamic movement, sudden stop, seamless transition. (Official examples also use rapid cuts /
+  freeze-frame / fade-in / fade-out -- valid for LTX generally, but in a segment/relay pipeline
+  each prompt is ONE continuous shot, so keep cut/fade language OUT of per-segment prompts.)
 - **Visual effects (when relevant):** particle systems, motion blur, depth of field.
 
 LTX's named strengths to lean on: cinematic compositions with shallow depth of field; **emotive
@@ -226,6 +308,10 @@ How to write the VOICE:
   motion land.
 - **Keep the line short** for a short clip -- a 2-5s shot fits a few words, not a paragraph (and
   match the prompt's overall length to the clip's duration).
+- **Multiple speakers are officially supported** -- an official sample stages a full
+  call-and-response (a teacher's line, the group's chanted reply, repeated) with each
+  speaker's line quoted once at its own beat. Give each speaker its own beat and voice;
+  never merge two speakers into one quote.
 - **Write each spoken line (or vocalized sound) exactly ONCE.** A character making a sound is BOTH
   seen (the mouth moves) and heard (the audio) -- but quote it only ONE time, as the audio, and
   describe the mouth/beak moving WITHOUT re-quoting the sound. Wrong (doubled): "her beak moves with
@@ -289,6 +375,8 @@ generic; carry the real intent in the positive.
 
 ## 10. QUICK CHECKLIST (does this prompt get what we want?)
 
+- [ ] NO CONTRADICTORY OR SIMULTANEOUS ACTIONS -- one coherent action path with a clear order; never two conflicting things at once. Ban "all at once" / "at the same moment" / opposing motions; stage beats sequentially/staggered, not a clump.
+- [ ] DYNAMICS present (section 3b): the shot has a COMPLICATION/gag/near-miss, an ACTIVE camera choice, physical CHAOS texture, and an ENERGY BEAT (tension->burst->hitch->release). Not just clean events. (Static camera only when stillness is the point.)
 - [ ] Single flowing paragraph, present tense; prompt length matched to clip duration + shot scale
       (~4-8 descriptive sentences for a typical clip).
 - [ ] Style/aesthetic (if any) named EARLY in the prompt.
@@ -314,6 +402,9 @@ generic; carry the real intent in the positive.
 - LTX-2.3 official prompt guide -- https://ltx.io/model/model-blog/ltx-2-3-prompt-guide
 - LTX-2 official prompting guide (blog: structure, 4-8 sentences, style-early, vocabulary banks,
   sing/languages, dancing-vs-jumping, iterate) -- https://ltx.io/blog/prompting-guide-for-ltx-2
+- LTX official docs prompting guide (key elements, sample prompts incl. the story-shaped
+  dialogue examples and multi-speaker call-and-response, seamless transition vocab; verified
+  2026-07-16) -- https://docs.ltx.io/open-source-model/usage-guides/prompting-guide
 - LTX-2.3 model overview -- https://ltx.io/model/ltx-2-3
 - LTX-2.3 Day-0 support in ComfyUI (enhanced audio-video) -- https://blog.comfy.org/p/ltx-23-day-0-supporte-in-comfyui
 - LTX-2.3 image+audio->video in ComfyUI (Next Diffusion) -- https://www.nextdiffusion.ai/tutorials/ltx-2-3-image-to-video-with-custom-audio-in-comfyui

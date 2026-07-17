@@ -96,6 +96,21 @@ async def ai_prompt_choices(request):
     })
 
 
+@PromptServer.instance.routes.get("/ltx_director/ai_prompt/models")
+async def ai_prompt_models(request):
+    """Installed Ollama model tags for the settings menu's suggestion lists. Proxied
+    through the ComfyUI server so the browser never fights CORS and remote Ollama URLs
+    work unchanged. Soft-fails to an empty list -- the fields accept free text anyway."""
+    from .ollama_client import DEFAULT_URL, list_models
+    base_url = (request.query.get("url") or "").strip() or DEFAULT_URL
+    loop = asyncio.get_event_loop()
+    try:
+        models = await loop.run_in_executor(None, list_models, base_url)
+    except OllamaError as e:
+        return web.json_response({"models": [], "error": str(e)})
+    return web.json_response({"models": models})
+
+
 @PromptServer.instance.routes.post("/ltx_director/ai_prompt")
 async def ai_prompt(request):
     try:
