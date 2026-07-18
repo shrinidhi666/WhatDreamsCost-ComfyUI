@@ -2303,7 +2303,7 @@ class TimelineEditor {
     const clearAllBtn = document.createElement("button");
     clearAllBtn.className = "pr-btn pr-btn-danger";
     clearAllBtn.innerHTML = `${ICONS.trash} Clear All`;
-    clearAllBtn.title = "Remove all images/videos/text and their prompts from the timeline and clear the global prompt. Node settings, audio, IC videos and MSR references are untouched.";
+    clearAllBtn.title = "Remove all images/videos/text and their prompts from the timeline, clear the global prompt and the AI Prompt hint. Node settings, audio, IC videos and MSR references are untouched.";
     clearAllBtn.addEventListener("click", () => {
       // Two-step guard: first click arms, second click (within 2.5s) clears.
       if (!this._clearAllArmed) {
@@ -4259,6 +4259,19 @@ class TimelineEditor {
     hintClearBtn.title = "Clear the AI Prompt hint (the brief only; prompts, beats and settings are untouched)";
     hintClearBtn.style.cssText = "background:#2a2a2a;color:#aaa;border:1px solid #444;border-radius:3px;font-size:10px;padding:2px 7px;cursor:pointer;flex:0 0 auto;";
     hintClearBtn.addEventListener("click", () => {
+      // Two-step guard, same as Clear All: first click arms, second click (within 2.5s) clears.
+      if (!this._hintClearArmed) {
+        this._hintClearArmed = true;
+        hintClearBtn.textContent = "Sure?";
+        this._hintClearTimer = setTimeout(() => {
+          this._hintClearArmed = false;
+          hintClearBtn.textContent = "✕";
+        }, 2500);
+        return;
+      }
+      clearTimeout(this._hintClearTimer);
+      this._hintClearArmed = false;
+      hintClearBtn.textContent = "✕";
       hintInput.value = "";
       this._ensureAiPrompt().hint = "";
       this.commitChanges();
@@ -5487,6 +5500,11 @@ class TimelineEditor {
 
     if (this.globalPromptInput) this.globalPromptInput.value = "";
     this.syncGlobalPrompt("");
+
+    // The AI Prompt HINT is content too -- clear it with the rest. The panel's axis
+    // settings (beats/motion/camera/audio) are settings and stay, per this button's contract.
+    if (this.timeline.aiPrompt) this.timeline.aiPrompt.hint = "";
+    if (this._aiHintInput) this._aiHintInput.value = "";
 
     this.selectedIndex = -1;
     this.selectedSegmentIds = [];
