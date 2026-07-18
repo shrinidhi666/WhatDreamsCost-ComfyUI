@@ -705,7 +705,7 @@ function parseInitial(jsonStr) {
             ? p.msr.subjects.slice(0, 4).map(s => (typeof s === "string" ? s : ""))
             : ["", "", "", ""],
           background: typeof p.msr.background === "string" ? p.msr.background : "",
-          frameCount: [17, 25, 33, 41, 49, 57, 65].includes(fc) ? fc : 41,
+          frameCount: [17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97, 105].includes(fc) ? fc : 41,
         };
       }
       if (p.aiPrompt && typeof p.aiPrompt === "object") {
@@ -4000,17 +4000,20 @@ class TimelineEditor {
     return !!(m && (m.background || (m.subjects || []).some(s => s)));
   }
 
-  // Auto frame count: each reference must occupy WHOLE 8-frame latent blocks (the video
-  // VAE compresses time 8:1), so frameCount = 8 x refs + 1 — the dropdown's values map
-  // exactly: 17=2 refs, 25=3, 33=4, 41=5. Misaligned counts (e.g. 17 with 3 refs) smear
-  // neighbouring references into the same latent block and visibly dirty the identity.
-  // Runs on every panel content change; the dropdown remains a manual override until the
-  // next content change. (The official MSR sample uses 41 with 5 refs — same rule.)
+  // Auto frame count: the DWELL rule — every SUBJECT gets >= 3 whole 8-frame latent
+  // blocks + 1 for the scene (proven 2026-07-18: the V2 LoRA drops one of 4 subjects at
+  // 2 blocks each, in our Director AND the official pipeline). The allocator front-loads
+  // subject 1, so the min-3-for-ALL counts are a table, not a formula: 1 subj = 25
+  // ([3]), 2 = 57 ([4,3]), 3 = 81 ([4,3,3]), 4 = 105 ([4,3,3,3]); scene-only = 17.
+  // Values >65 are this fork's extension of upstream's dropdown (same 8n+1 series).
+  // Runs on every panel content change; the dropdown remains a manual override until
+  // the next content change.
   _msrAutoFrameCount() {
     const m = this._ensureMsr();
-    const refs = (m.subjects || []).filter(s => s).length + (m.background ? 1 : 0);
-    if (refs > 0) {
-      m.frameCount = 41;  // upstream node default; used whenever any reference is present
+    const subs = (m.subjects || []).filter(s => s).length;
+    const hasAny = subs > 0 || !!m.background;
+    if (hasAny) {
+      m.frameCount = { 0: 17, 1: 25, 2: 57, 3: 81, 4: 105 }[subs] || 105;
     }
   }
 
@@ -4125,9 +4128,9 @@ class TimelineEditor {
     panel.appendChild(fcLabel);
 
     const fcSelect = document.createElement("select");
-    fcSelect.title = "Frames in the composed MSR reference clip. AUTO-SET to 8 x refs + 1 whenever you add/remove references (17 = 2 refs, 25 = 3, 33 = 4, 41 = 5, 49 = 6, 57 = 7, 65 = 8) so each reference fills whole latent blocks — misaligned counts smear references into each other. Change it manually to override until the refs change again.";
+    fcSelect.title = "Frames in the composed MSR reference clip. AUTO-SET so every SUBJECT gets at least 3 latent blocks + 1 for the scene (0 subs = 17, 1 = 25, 2 = 57, 3 = 81, 4 = 105): the V2 LoRA drops subjects below ~3 blocks each. Values above 65 are this fork's extension of the upstream list. The VIDEO must be at least this many frames. Change manually to override until the refs change again.";
     fcSelect.style.cssText = "background:#222;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;";
-    for (const v of [17, 25, 33, 41, 49, 57, 65]) {
+    for (const v of [17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97, 105]) {
       const opt = document.createElement("option");
       opt.value = String(v);
       opt.textContent = String(v);
@@ -4168,7 +4171,7 @@ class TimelineEditor {
       }
     }
     if (this._msrFrameCountSelect) {
-      this._msrFrameCountSelect.value = String([17, 25, 33, 41, 49, 57, 65].includes(parseInt(m.frameCount, 10)) ? parseInt(m.frameCount, 10) : 17);
+      this._msrFrameCountSelect.value = String([17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97, 105].includes(parseInt(m.frameCount, 10)) ? parseInt(m.frameCount, 10) : 17);
     }
   }
 

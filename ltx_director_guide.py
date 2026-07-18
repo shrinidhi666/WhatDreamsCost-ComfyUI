@@ -212,7 +212,12 @@ def _dilate_latent(latent: dict, horizontal_scale: int, vertical_scale: int) -> 
 # The naive frame_count // len split (previous version) put e.g. 5 refs at 9/8/8/8/8, straddling
 # block boundaries; this replaces it with upstream's exact allocation.
 
-MSR_FRAME_COUNTS = (17, 25, 33, 41, 49, 57, 65)  # upstream LiconMSR frame counts (max 4 subjects + 1 bg)
+# Upstream LiconMSR's dropdown stops at 65; values ABOVE 65 are OUR extension (same 8n+1
+# series, ordinary VAE math). Proven need (A/B 2026-07-18): the V2 LoRA drops one of 4
+# subjects at 65 frames (2 latent blocks each) -- >=3 blocks per subject fixes binding.
+# The allocator front-loads subject 1, so min-3-for-ALL needs: 1 subj=25, 2=57, 3=81,
+# 4=105 (the JS panel auto-sets these).
+MSR_FRAME_COUNTS = (17, 25, 33, 41, 49, 57, 65, 73, 81, 89, 97, 105)
 
 def _msr_estimate_ref_latent_frames(source_frame_count):
     if source_frame_count <= 1:
@@ -724,7 +729,13 @@ class LTXDirectorGuide:
                     resize_method=active_resize_method,
                 )
                 if msr_guide_latent.shape[2] > latent_length:
-                    msr_guide_latent = msr_guide_latent[:, :, :latent_length]
+                    # NEVER silently truncate -- dropped latents are dropped REFERENCES
+                    # (the scene is last and dies first). Upstream hard-asserts here.
+                    raise ValueError(
+                        f"[LTXDirectorGuide] MSR reference clip ({int(msr_frame_count)} frames = "
+                        f"{msr_guide_latent.shape[2]} latent frames) exceeds the video length "
+                        f"({latent_length} latent frames). Lower the MSR frame count or lengthen "
+                        "the clip -- truncating would silently drop references.")
                 msr_guide_shape = list(msr_guide_latent.shape[2:])
 
                 # References must enter the sampler FROZEN (append_keyframe fills noise level
