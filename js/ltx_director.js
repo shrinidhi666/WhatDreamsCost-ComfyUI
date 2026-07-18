@@ -4253,6 +4253,18 @@ class TimelineEditor {
     this._aiHintInput = hintInput;
     panel.appendChild(hintInput);
 
+    // Clear button for the hint ONLY -- wipes the brief, touches nothing else on the panel.
+    const hintClearBtn = document.createElement("button");
+    hintClearBtn.textContent = "✕";
+    hintClearBtn.title = "Clear the AI Prompt hint (the brief only; prompts, beats and settings are untouched)";
+    hintClearBtn.style.cssText = "background:#2a2a2a;color:#aaa;border:1px solid #444;border-radius:3px;font-size:10px;padding:2px 7px;cursor:pointer;flex:0 0 auto;";
+    hintClearBtn.addEventListener("click", () => {
+      hintInput.value = "";
+      this._ensureAiPrompt().hint = "";
+      this.commitChanges();
+    });
+    panel.appendChild(hintClearBtn);
+
     const segLabel = document.createElement("div");
     segLabel.textContent = "beats";
     segLabel.style.cssText = "font-size:10px;color:#888;margin-left:4px;";
