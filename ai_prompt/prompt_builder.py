@@ -86,13 +86,16 @@ MSR_RULES = """THE MSR RULES (etched, V2 -- follow ALL, no exceptions):
    multi-angle sheet per subject (a character shown from several angles in ONE image; a car as
    a three-angle product sheet) -- the strongest identity signal. Enumerate the SUBJECT the
    sheet depicts (one entity, one clause), never the sheet's individual panels.
-7. BIND BY TOKEN: the narration (the segment prompts) refers to every referenced entity by its
-   TOKEN "Image N" -- the enumeration's own number -- at EVERY mention: staging ("Image 1 stands
-   at the counter in frame left"), action ("Image 1 sways, bracing the counter"), and speech
-   (Image 1 says in a hoarse mumble, "I... want... water..."). Never re-describe the enumerated
-   look inline, never a proper name -- the token IS what binds the reference to the entity.
-   For referenced entities this token replaces the point-by-look rule; figures NOT on the
-   reference panel are still pointed at by look and frame position.
+7. BIND BY FUSED TOKEN + LOOK: the narration (the segment prompts) refers to every referenced
+   entity by its TOKEN "Image N" FUSED with its key look cue, at EVERY mention: staging
+   ("Image 1 in the crumpled grey suit stands at the counter in frame left"), action ("Image 2
+   with the pink bow hurries after"), and speech (Image 1 in the grey suit says in a hoarse
+   mumble, "I... want... water..."). The token ALONE is NOT enough -- the official V2 sample
+   fuses the look into every token mention, and identity binding fails without it (verified
+   2026-07-18: bare tokens dropped one of four near-identical subjects; fused mentions held all
+   four). Never a proper name. For referenced entities this fused reference replaces the
+   point-by-look rule; figures NOT on the reference panel are still pointed at by look and
+   frame position.
 8. CAMERA CUTS ARE ALLOWED: within the ONE scene the narration may cut between shots and must
    say so explicitly ("the camera cuts to a close up of Image 2", a two shot, an over the
    shoulder) -- the official V2 sample cuts freely. The LOCATION never changes.
@@ -375,7 +378,8 @@ def build_vision_prompt(beats, enumeration="", msr_subjects=0, audio_notes=None,
             "GLOBAL. ALL of the story goes into the SEGMENT prompts: one present-tense paragraph",
             "per beat that narrates ONLY what happens inside that beat's window, flowing naturally",
             "out of the previous beat and into the next. In every segment, refer to every",
-            "referenced entity by its TOKEN, Image N, at every mention (MSR rule 7). The FIRST",
+            "referenced entity by its TOKEN fused with its key look cue, like Image 1 in the deep",
+            "red scarf, at every mention (MSR rule 7). The FIRST",
             "segment opens with the spatial anchor (rule 9). Camera CUTS between shots of the ONE",
             "referenced scene are allowed and stated explicitly (rule 8); the location never",
             "changes.",
@@ -458,15 +462,16 @@ def build_vision_prompt(beats, enumeration="", msr_subjects=0, audio_notes=None,
             bind_note = (
                 "Do NOT write or repeat the enumeration yourself, and do NOT add narration to the\n"
                 "GLOBAL -- the enumeration IS the global. Put all story in the SEGMENTS, and there\n"
-                "bind under rule 7: refer to every referenced entity by its TOKEN, Image N, at\n"
-                "every mention, so the reference tokens bind to your prompt entities.\n\n"
+                "bind under rule 7: refer to every referenced entity by its TOKEN fused with its\n"
+                'key look cue ("Image 1 in the deep red scarf") at every mention, so the reference\n'
+                "tokens bind to your prompt entities.\n\n"
             )
         else:
             bind_note = (
                 "Do NOT write or repeat the enumeration yourself -- write the GLOBAL as the NARRATION\n"
                 "that follows it. Narrate under rule 7: refer to every referenced entity by its\n"
-                "TOKEN, Image N, at every mention, so the reference tokens bind to your prompt\n"
-                "entities.\n\n"
+                'TOKEN fused with its key look cue ("Image 1 in the deep red scarf") at every\n'
+                "mention, so the reference tokens bind to your prompt entities.\n\n"
             )
         # PLACEHOLDER NAMES: the brief may address a reference by a short alias; the number is
         # ALWAYS the enumeration/panel number. Subject aliases are stated only when subjects
@@ -480,7 +485,8 @@ def build_vision_prompt(beats, enumeration="", msr_subjects=0, audio_notes=None,
         ph.append('"scene" / "background" / "bg" / "subbg" mean the scene entry (the LAST'
                   ' enumeration line).')
         ph.append("Resolve every such name to its entry, apply the direction to it, and write"
-                  ' that entity in the output as its canonical token "Image N" (rule 7).')
+                  ' that entity in the output as its token fused with its key look cue'
+                  ' ("Image N in/with <look>", rule 7).')
         msr_block = (
             MSR_RULES + "\n\n"
             "The references were already READ in a separate pass. The enumeration for THIS clip\n"
